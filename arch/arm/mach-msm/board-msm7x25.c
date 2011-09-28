@@ -185,8 +185,8 @@ static struct platform_device huawei_battery_device = {
 static struct usb_mass_storage_platform_data usb_mass_storage_pdata = {
 	.nluns          = 0x02,
 	.buf_size       = 16384,
-	.vendor         = "GOOGLE",
-	.product        = "Mass storage",
+	.vendor         = "Huawei",
+	.product        = "U8120",
 	.release        = 0xffff,
 };
 
