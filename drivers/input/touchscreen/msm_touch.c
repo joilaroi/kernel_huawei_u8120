@@ -108,11 +108,12 @@
 
 #define TOUCH_OFFSET    4
 
+
 //static int32_t msm_tscal_scaler = 65536;
-static int32_t msm_tscal_xscale = 70046;
-static int32_t msm_tscal_xoffset = -4191987;
-static int32_t msm_tscal_yscale = 71735;
-static int32_t msm_tscal_yoffset = -3004437;
+static int32_t msm_tscal_xscale = 76459; //70046;
+static int32_t msm_tscal_xoffset = -5548871; //-4191987;
+static int32_t msm_tscal_yscale = 72818; //71735;
+static int32_t msm_tscal_yoffset = -4369172 ; //-3004437;
 //module_param_named(tscal_scaler, msm_tscal_scaler, int, 0664);
 module_param_named(tscal_xscale, msm_tscal_xscale, int, 0664);
 module_param_named(tscal_xoffset, msm_tscal_xoffset, int, 0664);
