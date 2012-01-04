@@ -143,6 +143,7 @@ static int sdio_irq_thread(void *_host)
 
 	if (host->caps & MMC_CAP_SDIO_IRQ)
 		host->ops->enable_sdio_irq(host, 0);
+	if(machine_is_msm7x25_u8120()){
 /* ATHENV */
            /* someone is trying to reclaim it? */ 
            while (!kthread_should_stop()) { 
