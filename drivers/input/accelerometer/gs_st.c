@@ -111,7 +111,7 @@ static inline int reg_write(struct gs_data *gs, int reg, uint8_t val)
 
 static int sensor_data[4];
 /*adjust device name */
-static char st_device_id[] = "st_35de";
+static char st_device_id[] = "ST35DE";
 
 int gs_st_data_to_compass(int accel_data [3])
 {
@@ -291,27 +291,27 @@ static void gs_work_func(struct work_struct *work)
 		z = MG_PER_SAMPLE * (s8)u8z;
 #endif	
 		
-		if(u8x&0x80)/*¸ºÖµ*/
+		if(u8x&0x80)/*ï¿½ï¿½Öµ*/
 		{
-			x= u8x-256; 		/*¸ºÊý°´ÕÕ²¹Âë¼ÆËã */  
+			x= u8x-256; 		/*ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Õ²ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ */  
 		}
 		else
 		{
 			x = u8x;
 		}
 					
-		if(u8y&0x80)/*¸ºÖµ*/
+		if(u8y&0x80)/*ï¿½ï¿½Öµ*/
 		{
-			 y=u8y-256; 		/*¸ºÊý°´ÕÕ²¹Âë¼ÆËã */  	 
+			 y=u8y-256; 		/*ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Õ²ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ */  	 
 		}
 		else
 		{
 			y = u8y;
 		}
 				
-		if(u8z&0x80)/*¸ºÖµ*/
+		if(u8z&0x80)/*ï¿½ï¿½Öµ*/
 		{
-			 z=u8z-256; 		/*¸ºÊý°´ÕÕ²¹Âë¼ÆËã */   
+			 z=u8z-256; 		/*ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Õ²ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ */   
 		}
 		else
 		{
