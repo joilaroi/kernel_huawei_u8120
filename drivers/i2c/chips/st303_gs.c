@@ -46,8 +46,8 @@
 static struct workqueue_struct *gs_wq;
 static signed short st_sensor_data[3];
 
-#define ST303DLH_I2C_NAME "st_303dlh"
-#define ST303DLM_I2C_NAME "st_303dlm"
+#define ST303DLH_I2C_NAME "ST303DLH"
+#define ST303DLM_I2C_NAME "ST303DLM"
 
 enum
 {
@@ -348,19 +348,19 @@ static void gs_work_func(struct work_struct *work)
 		
 		GS303_DEBUG(KERN_ERR "A  x :0x%x y :0x%x z :0x%x \n", x,y,z);
 	 
-		if(x&0x800)/*¸ºÖµ*/
+		if(x&0x800)/*ï¿½ï¿½Öµ*/
 		{
-			x -= 4096; 		/*¸ºÊý°´ÕÕ²¹Âë¼ÆËã */  
+			x -= 4096; 		/*ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Õ²ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ */  
 		}
 					
-		if(y&0x800)/*¸ºÖµ*/
+		if(y&0x800)/*ï¿½ï¿½Öµ*/
 		{
-			y -= 4096; 		/*¸ºÊý°´ÕÕ²¹Âë¼ÆËã */  	 
+			y -= 4096; 		/*ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Õ²ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ */  	 
 		}
 	
-		if(z&0x800)/*¸ºÖµ*/
+		if(z&0x800)/*ï¿½ï¿½Öµ*/
 		{
-			z -= 4096; 		/*¸ºÊý°´ÕÕ²¹Âë¼ÆËã */   
+			z -= 4096; 		/*ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Õ²ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ */   
 		}
 
 		memset((void*)st_sensor_data, 0, sizeof(st_sensor_data));
