@@ -1,26 +1,27 @@
-/*
- * AR6K device layer that handles register level I/O
- *
- * Copyright (c) 2007 Atheros Communications Inc.
- * All rights reserved.
- *
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  published by the Free Software Foundation;
- *
- *  Software distributed under the License is distributed on an "AS
- *  IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
- *  implied. See the License for the specific language governing
- *  rights and limitations under the License.
- *
- *
- *
- */
+//------------------------------------------------------------------------------
+// <copyright file="ar6k.c" company="Atheros">
+//    Copyright (c) 2007-2008 Atheros Corporation.  All rights reserved.
+// 
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License version 2 as
+// published by the Free Software Foundation;
+//
+// Software distributed under the License is distributed on an "AS
+// IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// rights and limitations under the License.
+//
+//
+//------------------------------------------------------------------------------
+//==============================================================================
+// AR6K device layer that handles register level I/O
+//
+// Author(s): ="Atheros"
+//==============================================================================
 #include "a_config.h"
 #include "athdefs.h"
 #include "a_types.h"
-#include "AR6Khwreg.h"
+#include "hw/mbox_host_reg.h"
 #include "a_osapi.h"
 #include "a_debug.h"
 #include "hif.h"
@@ -31,8 +32,8 @@
 
 extern A_UINT32 resetok;
 
-static A_STATUS DevEnableInterrupts(AR6K_DEVICE *pDev);
-static A_STATUS DevDisableInterrupts(AR6K_DEVICE *pDev);
+A_STATUS DevEnableInterrupts(AR6K_DEVICE *pDev);
+A_STATUS DevDisableInterrupts(AR6K_DEVICE *pDev);
 
 #define LOCK_AR6K(p)      A_MUTEX_LOCK(&(p)->Lock);
 #define UNLOCK_AR6K(p)    A_MUTEX_UNLOCK(&(p)->Lock);
@@ -55,19 +56,46 @@ HTC_PACKET *AR6KAllocIOPacket(AR6K_DEVICE *pDev)
     return pPacket;
 }
 
+void DevCleanup(AR6K_DEVICE *pDev)
+{
+    if (A_IS_MUTEX_VALID(&pDev->Lock)) {
+        A_MUTEX_DELETE(&pDev->Lock);
+    }
+
+    if (pDev->HifAttached) {
+        HIFDetachHTC(pDev->HIFDevice);
+        pDev->HifAttached = FALSE;
+    }
+
+}
+
 A_STATUS DevSetup(AR6K_DEVICE *pDev)
 {
     A_UINT32 mailboxaddrs[AR6K_MAILBOXES];
     A_UINT32 blocksizes[AR6K_MAILBOXES];
     A_STATUS status = A_OK;
     int      i;
+    HTC_CALLBACKS htcCallbacks;
 
     AR_DEBUG_ASSERT(AR6K_IRQ_PROC_REGS_SIZE == 16);
     AR_DEBUG_ASSERT(AR6K_IRQ_ENABLE_REGS_SIZE == 4);
 
     do {
-            /* give a handle to HIF for this target */
-        HIFSetHandle(pDev->HIFDevice, (void *)pDev);
+
+        A_MEMZERO(&htcCallbacks, sizeof(HTC_CALLBACKS));
+            /* the device layer handles these */
+        htcCallbacks.rwCompletionHandler = DevRWCompletionHandler;
+        htcCallbacks.dsrHandler = DevDsrHandler;
+        htcCallbacks.context = pDev;
+
+        status = HIFAttachHTC(pDev->HIFDevice, &htcCallbacks);
+
+        if (A_FAILED(status)) {
+            break;
+        }
+
+        pDev->HifAttached = TRUE;
+
             /* initialize our free list of IO packets */
         INIT_HTC_PACKET_QUEUE(&pDev->RegisterIOList);
         A_MUTEX_INIT(&pDev->Lock);
@@ -161,22 +189,24 @@ A_STATUS DevSetup(AR6K_DEVICE *pDev)
     } while (FALSE);
 
     if (A_FAILED(status)) {
-            /* make sure handle is cleared */
-        HIFSetHandle(pDev->HIFDevice, NULL);
+        if (pDev->HifAttached) {
+            HIFDetachHTC(pDev->HIFDevice);
+            pDev->HifAttached = FALSE;
+        }
     }
 
     return status;
 
 }
 
-static A_STATUS DevEnableInterrupts(AR6K_DEVICE *pDev)
+A_STATUS DevEnableInterrupts(AR6K_DEVICE *pDev)
 {
     A_STATUS                  status;
     AR6K_IRQ_ENABLE_REGISTERS regs;
 
     LOCK_AR6K(pDev);
 
-        /* Enable all the interrupts except for the dragon interrupt */
+        /* Enable all the interrupts except for the internal AR6000 CPU interrupt */
     pDev->IrqEnableRegisters.int_status_enable = INT_STATUS_ENABLE_ERROR_SET(0x01) |
                                       INT_STATUS_ENABLE_CPU_SET(0x01) |
                                       INT_STATUS_ENABLE_COUNTER_SET(0x01);
@@ -211,6 +241,11 @@ static A_STATUS DevEnableInterrupts(AR6K_DEVICE *pDev)
 
     UNLOCK_AR6K(pDev);
 
+/* ATHENV */
+#ifdef ANDROID_ENV
+    mdelay(100);
+#endif
+/* ATHENV */
         /* always synchronous */
     status = HIFReadWrite(pDev->HIFDevice,
                           INT_STATUS_ENABLE_ADDRESS,
@@ -229,7 +264,7 @@ static A_STATUS DevEnableInterrupts(AR6K_DEVICE *pDev)
     return status;
 }
 
-static A_STATUS DevDisableInterrupts(AR6K_DEVICE *pDev)
+A_STATUS DevDisableInterrupts(AR6K_DEVICE *pDev)
 {
     AR6K_IRQ_ENABLE_REGISTERS regs;
 
@@ -256,6 +291,14 @@ static A_STATUS DevDisableInterrupts(AR6K_DEVICE *pDev)
 /* enable device interrupts */
 A_STATUS DevUnmaskInterrupts(AR6K_DEVICE *pDev)
 {
+        /* for good measure, make sure interrupt are disabled before unmasking at the HIF
+         * layer.
+         * The rationale here is that between device insertion (where we clear the interrupts the first time)
+         * and when HTC is finally ready to handle interrupts, other software can perform target "soft" resets.
+         * The AR6K interrupt enables reset back to an "enabled" state when this happens.
+         *  */
+    DevDisableInterrupts(pDev);
+
         /* Unmask the host controller interrupts */
     HIFUnMaskInterrupt(pDev->HIFDevice);
 
@@ -265,16 +308,11 @@ A_STATUS DevUnmaskInterrupts(AR6K_DEVICE *pDev)
 /* disable all device interrupts */
 A_STATUS DevMaskInterrupts(AR6K_DEVICE *pDev)
 {
-    A_STATUS status;
+        /* mask the interrupt at the HIF layer, we don't want a stray interrupt taken while
+         * we zero out our shadow registers in DevDisableInterrupts()*/
+    HIFMaskInterrupt(pDev->HIFDevice);
 
-    status = DevDisableInterrupts(pDev);
-
-    if (A_SUCCESS(status)) {
-            /* Disable the interrupt at the HIF layer */
-        HIFMaskInterrupt(pDev->HIFDevice);
-    }
-
-    return status;
+    return DevDisableInterrupts(pDev);
 }
 
 /* callback when our fetch to enable/disable completes */
@@ -723,7 +761,7 @@ static A_STATUS GetCredits(AR6K_DEVICE *pDev, int mbox, int *pCredits)
         }
 
          /* delay a little, target may not be ready */
-         msleep(1000);
+         A_MDELAY(1000);
 
     }
 

@@ -1,23 +1,25 @@
+//------------------------------------------------------------------------------
+// <copyright file="bmi.h" company="Atheros">
+//    Copyright (c) 2004-2008 Atheros Corporation.  All rights reserved.
+// 
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License version 2 as
+// published by the Free Software Foundation;
+//
+// Software distributed under the License is distributed on an "AS
+// IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// rights and limitations under the License.
+//
+//
+//------------------------------------------------------------------------------
+//==============================================================================
+// BMI declarations and prototypes
+//
+// Author(s): ="Atheros"
+//==============================================================================
 #ifndef _BMI_H_
 #define _BMI_H_
-/*
- * Copyright (c) 2004-2005 Atheros Communications Inc.
- * All rights reserved.
- *
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  published by the Free Software Foundation;
- *
- *  Software distributed under the License is distributed on an "AS
- *  IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
- *  implied. See the License for the specific language governing
- *  rights and limitations under the License.
- *
- *
- *
- * BMI declarations and prototypes
- */
 
 #ifdef __cplusplus
 extern "C" {
@@ -92,6 +94,15 @@ A_STATUS
 BMIrompatchDeactivate(HIF_DEVICE *device,
                       A_UINT32 rompatch_count,
                       A_UINT32 *rompatch_list);
+
+A_STATUS
+BMILZStreamStart(HIF_DEVICE *device,
+                 A_UINT32 address);
+
+A_STATUS
+BMILZData(HIF_DEVICE *device,
+          A_UCHAR *buffer,
+          A_UINT32 length);
 
 #ifdef __cplusplus
 }

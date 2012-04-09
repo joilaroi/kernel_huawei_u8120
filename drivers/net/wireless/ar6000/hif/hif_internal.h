@@ -1,28 +1,23 @@
-/*
- * @file: hif_internal.h
- *
- * @abstract: internal header file for hif layer
- *
- * @notice: Copyright (c) 2004-2006 Atheros Communications Inc.
- *
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  published by the Free Software Foundation;
- *
- *  Software distributed under the License is distributed on an "AS
- *  IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
- *  implied. See the License for the specific language governing
- *  rights and limitations under the License.
- *
- *
- *
- */
-
-#include <linux/sdio/ctsystem.h>
-#include <linux/sdio/sdio_busdriver.h>
-#include <linux/sdio/_sdio_defs.h>
-#include <linux/sdio/sdio_lib.h>
+//------------------------------------------------------------------------------
+// <copyright file="hif_internal.h" company="Atheros">
+//    Copyright (c) 2004-2007 Atheros Corporation.  All rights reserved.
+// 
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License version 2 as
+// published by the Free Software Foundation;
+//
+// Software distributed under the License is distributed on an "AS
+// IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// rights and limitations under the License.
+//
+//
+//------------------------------------------------------------------------------
+//==============================================================================
+// internal header file for hif layer
+//
+// Author(s): ="Atheros"
+//==============================================================================
 #include "a_config.h"
 #include "athdefs.h"
 #include "a_types.h"
@@ -31,6 +26,7 @@
 
 #define MANUFACTURER_ID_AR6001_BASE        0x100
 #define MANUFACTURER_ID_AR6002_BASE        0x200
+#define MANUFACTURER_ID_AR6003_BASE        0x300
 #define FUNCTION_CLASS                     0x0
 #define MANUFACTURER_CODE                  0x271
 
@@ -55,48 +51,35 @@
 #define HIF_MBOX_END_ADDR(mbox)	                         \
     HIF_MBOX_START_ADDR(mbox) + HIF_MBOX_WIDTH - 1
 
-struct hif_device {
-    SDDEVICE *handle;
-    void *htc_handle;
-    OSKERNEL_HELPER insert_helper;
-    BOOL  helper_started;
-};
-
-typedef struct target_function_context {
-    SDFUNCTION           function; /* function description of the bus driver */
-    OS_SEMAPHORE         instanceSem; /* instance lock. Unused */
-    SDLIST               instanceList; /* list of instances. Unused */
-} TARGET_FUNCTION_CONTEXT;
-
 typedef struct bus_request {
-    struct bus_request *next;
-    SDREQUEST *request;
+    struct bus_request *next;       /* link list of available requests */
+    struct bus_request *inusenext;  /* link list of in use requests */
+    struct semaphore sem_req;
+    A_UINT32 address;               /* request data */
+    A_UCHAR *buffer;
+    A_UINT32 length;
+    A_UINT32 request;
     void *context;
+    A_STATUS status;
 } BUS_REQUEST;
 
-BOOL
-hifDeviceInserted(SDFUNCTION *function, SDDEVICE *device);
+struct hif_device {
+    struct sdio_func *func;
+    spinlock_t asynclock;
+    struct task_struct* async_task;             /* task to handle async commands */
+    struct semaphore sem_async;                 /* wake up for async task */
+    int    async_shutdown;                      /* stop the async task */
+    struct completion async_completion;          /* thread completion */
+    BUS_REQUEST   *asyncreq;                    /* request for async tasklet */
+    BUS_REQUEST *taskreq;                       /*  async tasklet data */
+    spinlock_t lock;
+    BUS_REQUEST *s_busRequestFreeQueue;         /* free list */
+    BUS_REQUEST busRequest[BUS_REQUEST_MAX_NUM]; /* available bus requests */
+    void     *claimedContext;
+    HTC_CALLBACKS htcCallbacks;
+    A_UINT8     *dma_buffer;
+};
 
-void
-hifDeviceRemoved(SDFUNCTION *function, SDDEVICE *device);
-
-SDREQUEST *
-hifAllocateDeviceRequest(SDDEVICE *device);
-
-void
-hifFreeDeviceRequest(SDREQUEST *request);
-
-void
-hifRWCompletionHandler(SDREQUEST *request);
-
-void
-hifIRQHandler(void *context);
-
-HIF_DEVICE *
-addHifDevice(SDDEVICE *handle);
-
-HIF_DEVICE *
-getHifDevice(SDDEVICE *handle);
-
-void
-delHifDevice(SDDEVICE *handle);
+#define HIF_DMA_BUFFER_SIZE (32 * 1024)
+#define CMD53_FIXED_ADDRESS 1
+#define CMD53_INCR_ADDRESS  2

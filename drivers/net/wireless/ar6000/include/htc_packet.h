@@ -1,27 +1,42 @@
-/*
- *
- * Copyright (c) 2007 Atheros Communications Inc.
- * All rights reserved.
- *
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  published by the Free Software Foundation;
- *
- *  Software distributed under the License is distributed on an "AS
- *  IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
- *  implied. See the License for the specific language governing
- *  rights and limitations under the License.
- *
- *
- *
- */
-
+//------------------------------------------------------------------------------
+// <copyright file="htc_packet.h" company="Atheros">
+//    Copyright (c) 2007-2008 Atheros Corporation.  All rights reserved.
+// 
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License version 2 as
+// published by the Free Software Foundation;
+//
+// Software distributed under the License is distributed on an "AS
+// IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// rights and limitations under the License.
+//
+//
+//------------------------------------------------------------------------------
+//==============================================================================
+// Author(s): ="Atheros"
+//==============================================================================
 #ifndef HTC_PACKET_H_
 #define HTC_PACKET_H_
 
 
 #include "dl_list.h"
+
+/* ------ Endpoint IDS ------ */
+typedef enum
+{
+    ENDPOINT_UNUSED = -1,
+    ENDPOINT_0 = 0,
+    ENDPOINT_1 = 1,
+    ENDPOINT_2 = 2,
+    ENDPOINT_3,
+    ENDPOINT_4,
+    ENDPOINT_5,
+    ENDPOINT_6,
+    ENDPOINT_7,
+    ENDPOINT_8,
+    ENDPOINT_MAX,
+} HTC_ENDPOINT_ID;
 
 struct _HTC_PACKET;
 
@@ -38,8 +53,10 @@ typedef struct _HTC_TX_PACKET_INFO {
 #define HTC_TX_PACKET_TAG_USER_DEFINED (HTC_TX_PACKET_TAG_INTERNAL + 9) /* user-defined tags start here */
 
 typedef struct _HTC_RX_PACKET_INFO {
-    A_UINT32    Unused;          /* for future use and to make compilers happy */
+    A_UINT32    IndicationFlags;
 } HTC_RX_PACKET_INFO;
+
+#define HTC_RX_FLAGS_INDICATE_MORE_PKTS  (1 << 0)
 
 /* wrapper around endpoint-specific packets */
 typedef struct _HTC_PACKET {
@@ -62,7 +79,7 @@ typedef struct _HTC_PACKET {
     A_UINT8         *pBuffer;       /* payload start (RX/TX) */
     A_UINT32        BufferLength;   /* length of buffer */
     A_UINT32        ActualLength;   /* actual length of payload */
-    int             Endpoint;       /* endpoint that this packet was sent/recv'd from */
+    HTC_ENDPOINT_ID Endpoint;       /* endpoint that this packet was sent/recv'd from */
     A_STATUS        Status;         /* completion status */
     union {
         HTC_TX_PACKET_INFO  AsTx;   /* Tx Packet specific info */
@@ -134,5 +151,8 @@ static INLINE HTC_PACKET *HTC_PACKET_DEQUEUE(HTC_PACKET_QUEUE *queue) {
     }
     return NULL;
 }
+
+#define HTC_GET_ENDPOINT_FROM_PKT(p) (p)->Endpoint
+#define HTC_GET_TAG_FROM_PKT(p)      (p)->PktInfo.AsTx.Tag
 
 #endif /*HTC_PACKET_H_*/

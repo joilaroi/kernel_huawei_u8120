@@ -1,35 +1,49 @@
-/*-
- * Copyright (c) 2001 Atsushi Onoe
- * Copyright (c) 2002-2004 Sam Leffler, Errno Consulting
- * Copyright (c) 2006 Atheros Communications, Inc.
- *
- * Wireless Network driver for Atheros AR6001
- * All rights reserved.
- *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
- * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
- * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- */
+//------------------------------------------------------------------------------
+// <copyright file="ieee80211_node.h" company="Atheros">
+//    Copyright (c) 2004-2008 Atheros Corporation.  All rights reserved.
+// 
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License version 2 as
+// published by the Free Software Foundation;
+//
+// Software distributed under the License is distributed on an "AS
+// IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// rights and limitations under the License.
+//
+//
+//------------------------------------------------------------------------------
+//==============================================================================
+// Author(s): ="Atheros"
+//==============================================================================
 #ifndef _IEEE80211_NODE_H_
 #define _IEEE80211_NODE_H_
 
 /*
  * Node locking definitions.
  */
+
+#ifdef REXOS
+#define IEEE80211_NODE_LOCK_INIT(_nt)   A_MUTEX_INIT_REX(&(_nt)->nt_nodelock)
+
+#define IEEE80211_NODE_LOCK(_nt)        A_MUTEX_LOCK_REX(&(_nt)->nt_nodelock)
+#define IEEE80211_NODE_UNLOCK(_nt)      A_MUTEX_UNLOCK_REX(&(_nt)->nt_nodelock)
+#define IEEE80211_NODE_LOCK_BH(_nt)     A_MUTEX_LOCK_REX(&(_nt)->nt_nodelock)
+#define IEEE80211_NODE_UNLOCK_BH(_nt)   A_MUTEX_UNLOCK_REX(&(_nt)->nt_nodelock)
+
+#else
+
 #define IEEE80211_NODE_LOCK_INIT(_nt)   A_MUTEX_INIT(&(_nt)->nt_nodelock)
-#define IEEE80211_NODE_LOCK_DESTROY(_nt)
+
 #define IEEE80211_NODE_LOCK(_nt)        A_MUTEX_LOCK(&(_nt)->nt_nodelock)
 #define IEEE80211_NODE_UNLOCK(_nt)      A_MUTEX_UNLOCK(&(_nt)->nt_nodelock)
 #define IEEE80211_NODE_LOCK_BH(_nt)     A_MUTEX_LOCK(&(_nt)->nt_nodelock)
 #define IEEE80211_NODE_UNLOCK_BH(_nt)   A_MUTEX_UNLOCK(&(_nt)->nt_nodelock)
+
+#endif
+
+#define IEEE80211_NODE_LOCK_DESTROY(_nt) if (A_IS_MUTEX_VALID(&(_nt)->nt_nodelock)) { \
+                                               A_MUTEX_DELETE(&(_nt)->nt_nodelock); }
 #define IEEE80211_NODE_LOCK_ASSERT(_nt)
 
 /*
@@ -45,7 +59,7 @@
 #define ieee80211_node_initref(_ni)     ((_ni)->ni_refcnt = 1)
 #define ieee80211_node_incref(_ni)      ((_ni)->ni_refcnt++)
 #define ieee80211_node_decref(_ni)      ((_ni)->ni_refcnt--)
-#define ieee80211_node_dectestref(_ni)  (((_ni)->ni_refcnt--) == 0)
+#define ieee80211_node_dectestref(_ni)  (((_ni)->ni_refcnt--) == 1)
 #define ieee80211_node_refcnt(_ni)      ((_ni)->ni_refcnt)
 
 #define IEEE80211_NODE_HASHSIZE 32
@@ -70,8 +84,18 @@ struct ieee80211_node_table {
     A_UINT32                nt_scangen; /* gen# for timeout scan */
     A_TIMER                 nt_inact_timer;
     A_UINT8                 isTimerArmed;   /* is the node timer armed */
+    A_UINT32                nt_nodeAge; /* node aging time */
+#ifdef OS_ROAM_MANAGEMENT
+    A_UINT32                nt_si_gen; /* gen# for scan indication*/
+#endif
 };
 
-#define WLAN_NODE_INACT_TIMEOUT_MSEC            10000
+/* ATHENV */
+#ifdef ANDROID_ENV
+#define WLAN_NODE_INACT_TIMEOUT_MSEC            30000
+#else
+#define WLAN_NODE_INACT_TIMEOUT_MSEC            120000
+#endif
+/* ATHENV */
 
 #endif /* _IEEE80211_NODE_H_ */

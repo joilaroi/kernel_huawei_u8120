@@ -1,22 +1,21 @@
-/*
- *
- * Copyright (c) 2007 Atheros Communications Inc.
- * All rights reserved.
- *
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  published by the Free Software Foundation;
- *
- *  Software distributed under the License is distributed on an "AS
- *  IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
- *  implied. See the License for the specific language governing
- *  rights and limitations under the License.
- *
- *
- *
- */
-
+//------------------------------------------------------------------------------
+// <copyright file="htc_internal.h" company="Atheros">
+//    Copyright (c) 2007-2008 Atheros Corporation.  All rights reserved.
+// 
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License version 2 as
+// published by the Free Software Foundation;
+//
+// Software distributed under the License is distributed on an "AS
+// IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// rights and limitations under the License.
+//
+//
+//------------------------------------------------------------------------------
+//==============================================================================
+// Author(s): ="Atheros"
+//==============================================================================
 #ifndef _HTC_INTERNAL_H_
 #define _HTC_INTERNAL_H_
 
@@ -61,6 +60,7 @@ typedef struct _HTC_ENDPOINT {
 #ifdef HTC_EP_STAT_PROFILING
     HTC_ENDPOINT_STATS          EndPointStats;  /* endpoint statistics */
 #endif
+    int                         TxProcessCount;
 } HTC_ENDPOINT;
 
 #ifdef HTC_EP_STAT_PROFILING
@@ -75,11 +75,9 @@ typedef struct _HTC_ENDPOINT {
 #define NUM_CONTROL_TX_BUFFERS  2
 #define NUM_CONTROL_RX_BUFFERS  (NUM_CONTROL_BUFFERS - NUM_CONTROL_TX_BUFFERS)
 
-#define HTC_CONTROL_BUFFER_SIZE (HTC_MAX_CONTROL_MESSAGE_LENGTH + HTC_HDR_LENGTH)
-
 typedef struct HTC_CONTROL_BUFFER {
     HTC_PACKET    HtcPacket;
-    A_UINT8       Buffer[HTC_CONTROL_BUFFER_SIZE];
+    A_UINT8       *Buffer;
 } HTC_CONTROL_BUFFER;
 
 /* our HTC target state */
@@ -101,7 +99,6 @@ typedef struct _HTC_TARGET {
     A_UINT32                    HTCStateFlags;
     HTC_ENDPOINT_ID             EpWaitingForBuffers;
     A_BOOL                      TargetFailure;
-    void                       *pInstanceContext;
 #define HTC_STATE_WAIT_BUFFERS  (1 << 0)
 #define HTC_STATE_STOPPING      (1 << 1)
 #ifdef HTC_CAPTURE_LAST_FRAME
@@ -109,6 +106,7 @@ typedef struct _HTC_TARGET {
     A_UINT8                     LastTrailer[256];
     A_UINT8                     LastTrailerLength;
 #endif
+    HTC_INIT_INFO               HTCInitInfo;                 
 } HTC_TARGET;
 
 #define HTC_STOPPING(t) ((t)->HTCStateFlags & HTC_STATE_STOPPING)
@@ -120,10 +118,17 @@ typedef struct _HTC_TARGET {
 #define UNLOCK_HTC_TX(t) A_MUTEX_UNLOCK(&(t)->HTCTxLock);
 
 #define GET_HTC_TARGET_FROM_HANDLE(hnd) ((HTC_TARGET *)(hnd))
-#define HTC_RECYCLE_RX_PKT(target,p)                \
-{                                                   \
-    HTC_PACKET_RESET_RX(pPacket);                   \
-    HTCAddReceivePkt((HTC_HANDLE)(target),(p));     \
+#define HTC_RECYCLE_RX_PKT(target,p,e)                           \
+{                                                                \
+    if ((e)->EpCallBacks.EpRecvAlloc != NULL) {                   \
+         HTC_PACKET_RESET_RX(pPacket);                           \
+         pPacket->Status = A_ECANCELED;                          \
+         (e)->EpCallBacks.EpRecv((e)->EpCallBacks.pContext,      \
+                                 (p));                           \
+    } else {                                                     \
+        HTC_PACKET_RESET_RX(pPacket);                            \
+        HTCAddReceivePkt((HTC_HANDLE)(target),(p));              \
+    }                                                            \
 }
 
 /* internal HTC functions */
@@ -135,7 +140,7 @@ void        HTCFreeControlBuffer(HTC_TARGET *target, HTC_PACKET *pPacket, HTC_PA
 A_STATUS    HTCIssueSend(HTC_TARGET *target, HTC_PACKET *pPacket, A_UINT8 Flags);
 A_STATUS    HTCIssueRecv(HTC_TARGET *target, HTC_PACKET *pPacket);
 void        HTCRecvCompleteHandler(void *Context, HTC_PACKET *pPacket);
-A_STATUS    HTCRecvMessagePendingHandler(void *Context, A_UINT32 LookAhead, A_BOOL *pAsyncProc);
+A_STATUS    HTCRecvMessagePendingHandler(void *Context, A_UINT32* LookAhead, A_BOOL *pAsyncProc);
 void        HTCProcessCreditRpt(HTC_TARGET *target, HTC_CREDIT_REPORT *pRpt, int NumEntries, HTC_ENDPOINT_ID FromEndpoint);
 A_STATUS    HTCSendSetupComplete(HTC_TARGET *target);
 void        HTCFlushRecvBuffers(HTC_TARGET *target);

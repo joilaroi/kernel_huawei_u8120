@@ -2,20 +2,20 @@
  * Copyright (c) 2004-2005 Atheros Communications Inc.
  * All rights reserved.
  *
+ * 
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License version 2 as
+// published by the Free Software Foundation;
+//
+// Software distributed under the License is distributed on an "AS
+// IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// rights and limitations under the License.
+//
+//
  *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  published by the Free Software Foundation;
  *
- *  Software distributed under the License is distributed on an "AS
- *  IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
- *  implied. See the License for the specific language governing
- *  rights and limitations under the License.
- *
- *
- *
- *
- * $Id: //depot/sw/releases/olca2.0-GPL/host/os/linux/include/ieee80211_ioctl.h#1 $
+ * $Id: //depot/sw/releases/olca2.2/host/os/linux/include/ieee80211_ioctl.h#1 $
  */
 
 #ifndef _IEEE80211_IOCTL_H_
@@ -90,9 +90,9 @@ struct ieee80211req_addpmkid {
 
 struct ieee80211req_authalg {
    u_int8_t auth_alg;
-};
+};  
 
-/*
+/* 
  * Request to add an IE to a Management Frame
  */
 enum{
@@ -107,7 +107,7 @@ enum{
 /*
  * The Maximum length of the IE that can be added to a Management frame
  */
-#define IEEE80211_APPIE_FRAME_MAX_LEN  78
+#define IEEE80211_APPIE_FRAME_MAX_LEN  200
 
 struct ieee80211req_getset_appiebuf {
     u_int32_t app_frmtype; /* management frame type for which buffer is added */
@@ -115,9 +115,9 @@ struct ieee80211req_getset_appiebuf {
     u_int8_t  app_buf[];
 };
 
-/*
+/* 
  * The following definitions are used by an application to set filter
- * for receiving management frames
+ * for receiving management frames 
  */
 enum {
      IEEE80211_FILTER_TYPE_BEACON      =   0x1,
@@ -155,6 +155,12 @@ enum {
 #define WPA_MODE_WPA2   2
 #define WPA_MODE_AUTO   3
 #define WPA_MODE_NONE   4
+
+struct ieee80211req_wpaie {
+	u_int8_t	wpa_macaddr[IEEE80211_ADDR_LEN];
+	u_int8_t	wpa_ie[IEEE80211_MAX_IE];
+	u_int8_t	rsn_ie[IEEE80211_MAX_IE];
+};
 
 #ifdef __cplusplus
 }

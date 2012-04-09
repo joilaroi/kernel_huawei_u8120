@@ -1,37 +1,23 @@
-/*-
- * Copyright (c) 2001 Atsushi Onoe
- * Copyright (c) 2002-2004 Sam Leffler, Errno Consulting
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- * 3. The name of the author may not be used to endorse or promote products
- *    derived from this software without specific prior written permission.
- *
- * Alternatively, this software may be distributed under the terms of the
- * GNU General Public License ("GPL") version 2 as published by the Free
- * Software Foundation.
- *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
- * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
- * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- */
-/*
- * IEEE 802.11 input handling.
- */
+//------------------------------------------------------------------------------
+// <copyright file="wlan_recv_beacon.c" company="Atheros">
+//    Copyright (c) 2004-2008 Atheros Corporation.  All rights reserved.
+// 
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License version 2 as
+// published by the Free Software Foundation;
+//
+// Software distributed under the License is distributed on an "AS
+// IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// rights and limitations under the License.
+//
+//
+//------------------------------------------------------------------------------
+//==============================================================================
+// IEEE 802.11 input handling.
+//
+// Author(s): ="Atheros"
+//==============================================================================
 
 #include "a_config.h"
 #include "athdefs.h"
@@ -80,6 +66,8 @@ iswmmoui(const A_UINT8 *frm)
     return frm[1] > 3 && LE_READ_4(frm+2) == ((WMM_OUI_TYPE<<24)|WMM_OUI);
 }
 
+/* unused functions for now */
+#if 0
 static int __inline
 iswmmparam(const A_UINT8 *frm)
 {
@@ -91,6 +79,7 @@ iswmminfo(const A_UINT8 *frm)
 {
     return frm[1] > 5 && frm[6] == WMM_INFO_OUI_SUBTYPE;
 }
+#endif
 
 static int __inline
 isatherosoui(const A_UINT8 *frm)
@@ -104,10 +93,19 @@ iswscoui(const A_UINT8 *frm)
     return frm[1] > 3 && LE_READ_4(frm+2) == ((0x04<<24)|WPA_OUI);
 }
 
+#ifdef PYXIS_ADHOC
+static int __inline
+ispyxisoui(const A_UINT8 *frm)
+{
+    return frm[1] > 3 && LE_READ_4(frm+2) == ((PYXIS_OUI_TYPE<<24)|PYXIS_OUI);
+}
+#endif
+
 A_STATUS
 wlan_parse_beacon(A_UINT8 *buf, int framelen, struct ieee80211_common_ie *cie)
 {
     A_UINT8 *frm, *efrm;
+    A_UINT8 elemid_ssid = FALSE;
 
     frm = buf;
     efrm = (A_UINT8 *) (frm + framelen);
@@ -138,7 +136,10 @@ wlan_parse_beacon(A_UINT8 *buf, int framelen, struct ieee80211_common_ie *cie)
     while (frm < efrm) {
         switch (*frm) {
         case IEEE80211_ELEMID_SSID:
-            cie->ie_ssid = frm;
+            if (!elemid_ssid) {
+                cie->ie_ssid = frm;
+                elemid_ssid = TRUE;
+            }
             break;
         case IEEE80211_ELEMID_RATES:
             cie->ie_rates = frm;
@@ -169,6 +170,13 @@ wlan_parse_beacon(A_UINT8 *buf, int framelen, struct ieee80211_common_ie *cie)
         case IEEE80211_ELEMID_RSN:
             cie->ie_rsn = frm;
             break;
+/*BU5D02447,WIFI Module,hanshirong 66539,20100204 begin++ */
+#ifdef WAPI_ENABLE
+        case IEEE80211_ELEMID_WAPI:
+            cie->ie_wapi = frm;
+            break;
+#endif /* WAPI_ENABLE */
+/*BU5D02447,WIFI Module,hanshirong 66539,20100204 end-- */
         case IEEE80211_ELEMID_VENDOR:
             if (iswpaoui(frm)) {
                 cie->ie_wpa = frm;
@@ -179,6 +187,11 @@ wlan_parse_beacon(A_UINT8 *buf, int framelen, struct ieee80211_common_ie *cie)
             } else if(iswscoui(frm)) {
                 cie->ie_wsc = frm;
             }
+#ifdef PYXIS_ADHOC
+            else if(ispyxisoui(frm)) {
+                cie->ie_pyxis= frm;
+            }
+#endif
             break;
         default:
             break;

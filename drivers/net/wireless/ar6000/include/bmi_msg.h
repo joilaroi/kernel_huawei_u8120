@@ -1,23 +1,24 @@
+//------------------------------------------------------------------------------
+// <copyright file="bmi_msg.h" company="Atheros">
+//    Copyright (c) 2004-2007 Atheros Corporation.  All rights reserved.
+// 
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License version 2 as
+// published by the Free Software Foundation;
+//
+// Software distributed under the License is distributed on an "AS
+// IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// rights and limitations under the License.
+//
+//
+//------------------------------------------------------------------------------
+//==============================================================================
+// Author(s): ="Atheros"
+//==============================================================================
+
 #ifndef __BMI_MSG_H__
 #define __BMI_MSG_H__
-/*
- *
- * Copyright (c) 2004-2007 Atheros Communications Inc.
- * All rights reserved.
- *
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  published by the Free Software Foundation;
- *
- *  Software distributed under the License is distributed on an "AS
- *  IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
- *  implied. See the License for the specific language governing
- *  rights and limitations under the License.
- *
- *
- *
- */
 
 /*
  * Bootloader Messaging Interface (BMI)
@@ -48,7 +49,7 @@
 
 
 /* Maximum data size used for BMI transfers */
-#define BMI_DATASZ_MAX                     32
+#define BMI_DATASZ_MAX                      256
 
 /* BMI Commands */
 
@@ -110,7 +111,7 @@
          * Request format:
          *    A_UINT32      command (BMI_READ_REGISTER)
          *    A_UINT32      address
-         * Response format:
+         * Response format: 
          *    A_UINT32      value
          */
 
@@ -146,6 +147,7 @@ struct bmi_target_info {
 #define TARGET_VERSION_SENTINAL 0xffffffff
 #define TARGET_TYPE_AR6001 1
 #define TARGET_TYPE_AR6002 2
+#define TARGET_TYPE_AR6003 3
 
 
 #define BMI_ROMPATCH_INSTALL               9
@@ -195,5 +197,35 @@ struct bmi_target_info {
          * Response format: none
          */
 
+
+#define BMI_LZ_STREAM_START                13
+        /*
+         * Semantics: Begin an LZ-compressed stream of input
+         * which is to be uncompressed by the Target to an
+         * output buffer at address.  The output buffer must
+         * be sufficiently large to hold the uncompressed
+         * output from the compressed input stream.  This BMI
+         * command should be followed by a series of 1 or more
+         * BMI_LZ_DATA commands.
+         *    A_UINT32      command (BMI_LZ_STREAM_START)
+         *    A_UINT32      address
+         * Note: Not supported on all versions of ROM firmware.
+         */
+
+#define BMI_LZ_DATA                        14
+        /*
+         * Semantics: Host writes AR6K memory with LZ-compressed
+         * data which is uncompressed by the Target.  This command
+         * must be preceded by a BMI_LZ_STREAM_START command. A series
+         * of BMI_LZ_DATA commands are considered part of a single
+         * input stream until another BMI_LZ_STREAM_START is issued.
+         * Request format:
+         *    A_UINT32      command (BMI_LZ_DATA)
+         *    A_UINT32      length (of compressed data),
+         *                  at most BMI_DATASZ_MAX
+         *    A_UINT8       CompressedData[length]
+         * Response format: none
+         * Note: Not supported on all versions of ROM firmware.
+         */
 
 #endif /* __BMI_MSG_H__ */

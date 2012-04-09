@@ -1,10 +1,23 @@
+//------------------------------------------------------------------------------
+// <copyright file="wmix.h" company="Atheros">
+//    Copyright (c) 2004-2007 Atheros Corporation.  All rights reserved.
+// 
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License version 2 as
+// published by the Free Software Foundation;
+//
+// Software distributed under the License is distributed on an "AS
+// IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// rights and limitations under the License.
+//
+//
+//------------------------------------------------------------------------------
+//==============================================================================
+// Author(s): ="Atheros"
+//==============================================================================
+
 /*
- * Copyright (c) 2004-2005 Atheros Communications Inc.
- * All rights reserved.
- *
- *
- * $ATH_LICENSE_HOSTSDK0_C$
- *
  * This file contains extensions of the WMI protocol specified in the
  * Wireless Module Interface (WMI).  It includes definitions of all
  * extended commands and events.  Extensions include useful commands
@@ -14,7 +27,6 @@
  *
  * Extended WMIX commands are encapsulated in a WMI message with
  * cmd=WMI_EXTENSION_CMD.
- *
  */
 
 #ifndef _WMIX_H_
@@ -52,6 +64,11 @@ typedef enum {
     WMIX_GPIO_INTR_ACK_CMDID,
     WMIX_HB_CHALLENGE_RESP_CMDID,
     WMIX_DBGLOG_CFG_MODULE_CMDID,
+    WMIX_PROF_CFG_CMDID,                 /* 0x200a */
+    WMIX_PROF_ADDR_SET_CMDID,
+    WMIX_PROF_START_CMDID,
+    WMIX_PROF_STOP_CMDID,
+    WMIX_PROF_COUNT_GET_CMDID,
 } WMIX_COMMAND_ID;
 
 typedef enum {
@@ -63,6 +80,7 @@ typedef enum {
     WMIX_GPIO_ACK_EVENTID,
     WMIX_HB_CHALLENGE_RESP_EVENTID,
     WMIX_DBGLOG_EVENTID,
+    WMIX_PROF_COUNT_EVENTID,
 } WMIX_EVENT_ID;
 
 /*
@@ -121,7 +139,7 @@ typedef PREPACK struct {
 } POSTPACK WMIX_DSETDATA_REPLY_CMD;
 
 
-/*
+/* 
  * =============GPIO support=================
  * All masks are 18-bit masks with bit N operating on GPIO pin N.
  */
@@ -144,7 +162,7 @@ typedef PREPACK struct {
     A_UINT32              disable_mask;         /* pins to disable/tristate */
 } POSTPACK WMIX_GPIO_OUTPUT_SET_CMD;
 
-/*
+/* 
  * Set a GPIO register.  For debug/exceptional cases.
  * Values for gpioreg_id are GPIO_REGISTER_IDs, defined in a
  * platform-dependent header.
@@ -184,7 +202,7 @@ typedef PREPACK struct {
  * using a GPIO_DATA_EVENT with
  *   value set to the mask of GPIO pin inputs and
  *   reg_id set to GPIO_ID_NONE
- *
+ * 
  *
  * Target responds to Hosts's earlier WMIX_GPIO_REGISTER_GET_CMDID request
  * using a GPIO_DATA_EVENT with
@@ -221,6 +239,30 @@ typedef PREPACK struct {
 typedef PREPACK struct {
     struct dbglog_config_s config;
 } POSTPACK WMIX_DBGLOG_CFG_MODULE_CMD;
+
+/*
+ * =============Target Profiling support=================
+ */
+
+typedef PREPACK struct {
+    A_UINT32 period; /* Time (in 30.5us ticks) between samples */
+    A_UINT32 nbins;
+} POSTPACK WMIX_PROF_CFG_CMD;
+
+typedef PREPACK struct {
+    A_UINT32 addr;
+} POSTPACK WMIX_PROF_ADDR_SET_CMD;
+
+/*
+ * Target responds to Hosts's earlier WMIX_PROF_COUNT_GET_CMDID request
+ * using a WMIX_PROF_COUNT_EVENT with
+ *   addr set to the next address
+ *   count set to the corresponding count
+ */
+typedef PREPACK struct {
+    A_UINT32              addr;
+    A_UINT32              count;
+} POSTPACK WMIX_PROF_COUNT_EVENT;
 
 #ifndef ATH_TARGET
 #include "athendpack.h"

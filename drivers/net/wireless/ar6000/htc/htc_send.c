@@ -1,23 +1,27 @@
-/*
- *
- * Copyright (c) 2007 Atheros Communications Inc.
- * All rights reserved.
- *
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  published by the Free Software Foundation;
- *
- *  Software distributed under the License is distributed on an "AS
- *  IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
- *  implied. See the License for the specific language governing
- *  rights and limitations under the License.
- *
- *
- *
- */
-
+//------------------------------------------------------------------------------
+// <copyright file="htc_send.c" company="Atheros">
+//    Copyright (c) 2007-2008 Atheros Corporation.  All rights reserved.
+// 
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License version 2 as
+// published by the Free Software Foundation;
+//
+// Software distributed under the License is distributed on an "AS
+// IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// rights and limitations under the License.
+//
+//
+//------------------------------------------------------------------------------
+//==============================================================================
+// Author(s): ="Atheros"
+//==============================================================================
 #include "htc_internal.h"
+
+typedef enum _HTC_SEND_QUEUE_RESULT {
+    HTC_SEND_QUEUE_OK = 0,    /* packet was queued */
+    HTC_SEND_QUEUE_DROP = 1,  /* this packet should be dropped */
+} HTC_SEND_QUEUE_RESULT;
 
 #define DO_EP_TX_COMPLETION(ep,p)                                    \
 {                                                                    \
@@ -101,29 +105,60 @@ A_STATUS HTCIssueSend(HTC_TARGET *target, HTC_PACKET *pPacket, A_UINT8 SendFlags
 }
 
 /* try to send the current packet or a packet at the head of the TX queue,
- * if there are no credits, the packet remains in the queue. */
-static void HTCTrySend(HTC_TARGET      *target,
-                       HTC_PACKET      *pPacketToSend,
-                       HTC_ENDPOINT_ID ep)
+ * if there are no credits, the packet remains in the queue.
+ * this function returns the result of the attempt to send the HTC packet */
+static HTC_SEND_QUEUE_RESULT HTCTrySend(HTC_TARGET   *target,
+                                        HTC_ENDPOINT *pEndpoint,
+                                        HTC_PACKET   *pPacketToSend)
 {
-    HTC_PACKET   *pPacket;
-    HTC_ENDPOINT *pEndpoint;
-    int          creditsRequired;
-    A_UINT8      sendFlags;
+    HTC_PACKET  *pPacket;
+    int         creditsRequired;
+    int         remainder;
+    A_UINT8     sendFlags;
+    HTC_SEND_QUEUE_RESULT result;
 
     AR_DEBUG_PRINTF(ATH_DEBUG_SEND,("+HTCTrySend (pPkt:0x%X)\n",(A_UINT32)pPacketToSend));
 
-    pEndpoint = &target->EndPoint[ep];
+    if (pPacketToSend != NULL) {
+            /* see if adding this packet hits the max depth */
+        if ((pEndpoint->CurrentTxQueueDepth + 1) >= pEndpoint->MaxTxQueueDepth) {
+            AR_DEBUG_PRINTF(ATH_DEBUG_SEND, (" Endpoint %d, TX queue is full, Depth:%d, Max:%d \n",
+                    pPacketToSend->Endpoint, pEndpoint->CurrentTxQueueDepth, pEndpoint->MaxTxQueueDepth));
+                /* queue will be full, invoke any callbacks to determine what action to take */
+            if (pEndpoint->EpCallBacks.EpSendFull != NULL) {
+                AR_DEBUG_PRINTF(ATH_DEBUG_SEND, (" Calling driver's send full callback.... \n"));
+                if (pEndpoint->EpCallBacks.EpSendFull(pEndpoint->EpCallBacks.pContext,
+                                                      pPacketToSend) == HTC_SEND_FULL_DROP) {
+                        /* callback wants the packet dropped */
+                    INC_HTC_EP_STAT(pEndpoint, TxDropped, 1);
+                    AR_DEBUG_PRINTF(ATH_DEBUG_SEND,("-HTCTrySend:  \n"));
+                    return HTC_SEND_QUEUE_DROP;
+                }
+            }
+        }
+    }
 
     LOCK_HTC_TX(target);
 
+    result = HTC_SEND_QUEUE_OK;
+
     if (pPacketToSend != NULL) {
-        /* caller supplied us a packet to queue to the tail of the HTC TX queue before
-         * we check the tx queue */
+            /* packet was supplied to be queued */
         HTC_PACKET_ENQUEUE(&pEndpoint->TxQueue,pPacketToSend);
         pEndpoint->CurrentTxQueueDepth++;
     }
 
+    pEndpoint->TxProcessCount++;    
+    if (pEndpoint->TxProcessCount > 1) {
+        /* another thread is draining the queues, get out */
+        pEndpoint->TxProcessCount--;     
+        UNLOCK_HTC_TX(target);
+        AR_DEBUG_PRINTF(ATH_DEBUG_SEND,("-HTCTrySend:  \n"));
+        return HTC_SEND_QUEUE_OK;        
+    }
+    
+    /* at this point, only 1 thread may enter to drain this endpoint queue */
+       
         /* now drain the TX queue for transmission as long as we have enough
          * credits */
 
@@ -131,6 +166,15 @@ static void HTCTrySend(HTC_TARGET      *target,
 
         if (HTC_QUEUE_EMPTY(&pEndpoint->TxQueue)) {
                 /* nothing in the queue */
+            break;
+        }
+
+        if (HTC_STOPPING(target)) {
+            if (pPacketToSend != NULL) {
+                HTC_PACKET_REMOVE(pPacketToSend);
+                pEndpoint->CurrentTxQueueDepth--;
+                result = HTC_SEND_QUEUE_DROP;
+            }
             break;
         }
 
@@ -142,9 +186,12 @@ static void HTCTrySend(HTC_TARGET      *target,
                 (A_UINT32)pPacket, pEndpoint->CurrentTxQueueDepth));
 
             /* figure out how many credits this message requires */
-        creditsRequired  = pPacket->ActualLength + HTC_HDR_LENGTH;
-        creditsRequired += target->TargetCreditSize - 1;
-        creditsRequired /= target->TargetCreditSize;
+        creditsRequired = (pPacket->ActualLength + HTC_HDR_LENGTH) / target->TargetCreditSize;
+        remainder = (pPacket->ActualLength + HTC_HDR_LENGTH) % target->TargetCreditSize;
+
+        if (remainder) {
+            creditsRequired++;
+        }
 
         AR_DEBUG_PRINTF(ATH_DEBUG_SEND,(" Creds Required:%d   Got:%d\n",
                             creditsRequired, pEndpoint->CreditDist.TxCredits));
@@ -169,7 +216,6 @@ static void HTCTrySend(HTC_TARGET      *target,
                             HTC_CREDIT_DIST_SEEK_CREDITS,
                             "Seek Credits",
                             &pEndpoint->CreditDist);
-
             pEndpoint->CreditDist.TxCreditsSeek = 0;
 
             if (pEndpoint->CreditDist.TxCredits < creditsRequired) {
@@ -185,11 +231,25 @@ static void HTCTrySend(HTC_TARGET      *target,
         pEndpoint->CreditDist.TxCredits -= creditsRequired;
         INC_HTC_EP_STAT(pEndpoint, TxCreditsConsummed, creditsRequired);
 
-            /* check if we need credits */
+            /* check if we need credits back from the target */
         if (pEndpoint->CreditDist.TxCredits < pEndpoint->CreditDist.TxCreditsPerMaxMsg) {
-            sendFlags |= HTC_FLAGS_NEED_CREDIT_UPDATE;
-            INC_HTC_EP_STAT(pEndpoint, TxCreditLowIndications, 1);
-            AR_DEBUG_PRINTF(ATH_DEBUG_SEND,(" Host Needs Credits  \n"));
+                /* we are getting low on credits, see if we can ask for more from the distribution function */
+            pEndpoint->CreditDist.TxCreditsSeek =
+                        pEndpoint->CreditDist.TxCreditsPerMaxMsg - pEndpoint->CreditDist.TxCredits;
+
+            DO_DISTRIBUTION(target,
+                            HTC_CREDIT_DIST_SEEK_CREDITS,
+                            "Seek Credits",
+                            &pEndpoint->CreditDist);
+
+            pEndpoint->CreditDist.TxCreditsSeek = 0;
+                /* see if we were successful in getting more */
+            if (pEndpoint->CreditDist.TxCredits < pEndpoint->CreditDist.TxCreditsPerMaxMsg) {
+                    /* tell the target we need credits ASAP! */
+                sendFlags |= HTC_FLAGS_NEED_CREDIT_UPDATE;
+                INC_HTC_EP_STAT(pEndpoint, TxCreditLowIndications, 1);
+                AR_DEBUG_PRINTF(ATH_DEBUG_SEND,(" Host Needs Credits  \n"));
+            }
         }
 
             /* now we can fully dequeue */
@@ -206,24 +266,14 @@ static void HTCTrySend(HTC_TARGET      *target,
 
         /* go back and check for more messages */
     }
-
-    if (pEndpoint->CurrentTxQueueDepth >= pEndpoint->MaxTxQueueDepth) {
-        AR_DEBUG_PRINTF(ATH_DEBUG_SEND, (" Endpoint %d, TX queue is full, Depth:%d, Max:%d \n",
-                        ep, pEndpoint->CurrentTxQueueDepth, pEndpoint->MaxTxQueueDepth));
-        UNLOCK_HTC_TX(target);
-            /* queue is now full, let caller know */
-        if (pEndpoint->EpCallBacks.EpSendFull != NULL) {
-            AR_DEBUG_PRINTF(ATH_DEBUG_SEND, (" Calling driver's send full callback.... \n"));
-            pEndpoint->EpCallBacks.EpSendFull(pEndpoint->EpCallBacks.pContext, ep);
-        }
-    } else {
-        UNLOCK_HTC_TX(target);
-            /* queue is now available for new packet, let caller know */
-        if (pEndpoint->EpCallBacks.EpSendAvail)
-            pEndpoint->EpCallBacks.EpSendAvail(pEndpoint->EpCallBacks.pContext, ep);
-    }
+    
+        /* we're done, clear count */
+    pEndpoint->TxProcessCount = 0;
+    UNLOCK_HTC_TX(target);
 
     AR_DEBUG_PRINTF(ATH_DEBUG_SEND,("-HTCTrySend:  \n"));
+
+    return result;
 }
 
 /* HTC API - HTCSendPkt */
@@ -233,6 +283,7 @@ A_STATUS HTCSendPkt(HTC_HANDLE HTCHandle, HTC_PACKET *pPacket)
     HTC_ENDPOINT    *pEndpoint;
     HTC_ENDPOINT_ID ep;
     A_STATUS        status = A_OK;
+    HTC_SEND_QUEUE_RESULT result;
 
     AR_DEBUG_PRINTF(ATH_DEBUG_SEND,
                     ("+HTCSendPkt: Enter endPointId: %d, buffer: 0x%X, length: %d \n",
@@ -244,20 +295,28 @@ A_STATUS HTCSendPkt(HTC_HANDLE HTCHandle, HTC_PACKET *pPacket)
 
     do {
 
-        if (HTC_STOPPING(target)) {
-            status = A_ECANCELED;
-            pPacket->Status = status;
-            DO_EP_TX_COMPLETION(pEndpoint,pPacket);
-            break;
-        }
             /* everything sent through this interface is asynchronous */
             /* fill in HTC completion routines */
         pPacket->Completion = HTCSendPktCompletionHandler;
         pPacket->pContext = target;
 
-        HTCTrySend(target, pPacket, ep);
+        result = HTCTrySend(target, pEndpoint, pPacket);
+
+        if (HTC_SEND_QUEUE_DROP == result) {
+            AR_DEBUG_PRINTF(ATH_DEBUG_SEND, (" Endpoint %d, TX packet dropped \n", ep));
+            if (HTC_STOPPING(target)) {
+                status = A_ECANCELED;
+            } else {
+                status = A_NO_RESOURCE;
+            }
+        }
 
     } while (FALSE);
+
+    if (A_FAILED(status)) {
+        pPacket->Status = status;
+        DO_EP_TX_COMPLETION(pEndpoint,pPacket);
+    }
 
     AR_DEBUG_PRINTF(ATH_DEBUG_SEND, ("-HTCSendPkt \n"));
 
@@ -288,7 +347,7 @@ static INLINE void HTCCheckEndpointTxQueues(HTC_TARGET *target)
                  * Highest priority queue get's processed first, if there are credits available the
                  * highest priority queue will get a chance to reclaim credits from lower priority
                  * ones */
-            HTCTrySend(target, NULL, pDistItem->Endpoint);
+            HTCTrySend(target, pEndpoint, NULL);
         }
 
         pDistItem = pDistItem->pNext;
@@ -354,7 +413,11 @@ void HTCProcessCreditRpt(HTC_TARGET *target, HTC_CREDIT_REPORT *pRpt, int NumEnt
                 /* flag that we have to do the distribution */
             doDist = TRUE;
         }
-
+        
+            /* refresh tx depth for distribution function that will recover these credits
+             * NOTE: this is only valid when there are credits to recover! */
+        pEndpoint->CreditDist.TxQueueDepth = pEndpoint->CurrentTxQueueDepth;
+        
         totalCredits += pRpt->Credits;
     }
 
@@ -421,10 +484,6 @@ static void HTCFlushEndpointTX(HTC_TARGET *target, HTC_ENDPOINT *pEndpoint, HTC_
 
 void DumpCreditDist(HTC_ENDPOINT_CREDIT_DIST *pEPDist)
 {
-#ifdef DEBUG
-    HTC_ENDPOINT *pEndpoint = (HTC_ENDPOINT *)pEPDist->pHTCReserved;
-#endif
-
     AR_DEBUG_PRINTF(ATH_DEBUG_ANY, ("--- EP : %d  ServiceID: 0x%X    --------------\n",
                         pEPDist->Endpoint, pEPDist->ServiceID));
     AR_DEBUG_PRINTF(ATH_DEBUG_ANY, (" this:0x%X next:0x%X prev:0x%X\n",
@@ -438,7 +497,8 @@ void DumpCreditDist(HTC_ENDPOINT_CREDIT_DIST *pEPDist)
     AR_DEBUG_PRINTF(ATH_DEBUG_ANY, (" TxCreditSize       : %d \n", pEPDist->TxCreditSize));
     AR_DEBUG_PRINTF(ATH_DEBUG_ANY, (" TxCreditsPerMaxMsg : %d \n", pEPDist->TxCreditsPerMaxMsg));
     AR_DEBUG_PRINTF(ATH_DEBUG_ANY, (" TxCreditsToDist    : %d \n", pEPDist->TxCreditsToDist));
-    AR_DEBUG_PRINTF(ATH_DEBUG_ANY, (" TxQueueDepth       : %d \n", pEndpoint->CurrentTxQueueDepth));
+    AR_DEBUG_PRINTF(ATH_DEBUG_ANY, (" TxQueueDepth       : %d \n", 
+                    ((HTC_ENDPOINT *) pEPDist->pHTCReserved)->CurrentTxQueueDepth));
     AR_DEBUG_PRINTF(ATH_DEBUG_ANY, ("----------------------------------------------------\n"));
 }
 
@@ -475,6 +535,7 @@ void HTCFlushSendPkts(HTC_TARGET *target)
         }
         HTCFlushEndpointTX(target,pEndpoint,HTC_TX_PACKET_TAG_ALL);
     }
+
 
 }
 
@@ -525,6 +586,8 @@ void HTCIndicateActivityChange(HTC_HANDLE      HTCHandle,
     }
 
     if (doDist) {
+            /* indicate current Tx Queue depth to the credit distribution function */
+        pEndpoint->CreditDist.TxQueueDepth = pEndpoint->CurrentTxQueueDepth;
         /* do distribution again based on activity change
          * note, this is done with the lock held */
         DO_DISTRIBUTION(target,
@@ -535,4 +598,11 @@ void HTCIndicateActivityChange(HTC_HANDLE      HTCHandle,
 
     UNLOCK_HTC_TX(target);
 
+    if (doDist && !Active) {
+        /* if a stream went inactive and this resulted in a credit distribution change,
+         * some credits may now be available for HTC packets that are stuck in
+         * HTC queues */
+        HTCCheckEndpointTxQueues(target);
+    }
 }
+

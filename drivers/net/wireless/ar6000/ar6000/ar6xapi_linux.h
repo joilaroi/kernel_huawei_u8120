@@ -5,17 +5,17 @@
  * Copyright (c) 2004-2007 Atheros Communications Inc.
  * All rights reserved.
  *
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  published by the Free Software Foundation;
- *
- *  Software distributed under the License is distributed on an "AS
- *  IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
- *  implied. See the License for the specific language governing
- *  rights and limitations under the License.
- *
- *
+ * 
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License version 2 as
+// published by the Free Software Foundation;
+//
+// Software distributed under the License is distributed on an "AS
+// IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// rights and limitations under the License.
+//
+//
  *
  */
 
@@ -25,9 +25,9 @@ extern "C" {
 
 struct ar6_softc;
 
-void ar6000_ready_event(void *devt, A_UINT8 *datap, A_UINT8 phyCap);
-A_UINT8 ar6000_iptos_to_userPriority(A_UINT8 *pkt);
-A_STATUS ar6000_control_tx(void *devt, void *osbuf, WMI_PRI_STREAM_ID streamID);
+void ar6000_ready_event(void *devt, A_UINT8 *datap, A_UINT8 phyCap,
+                        A_UINT32 ver);
+A_STATUS ar6000_control_tx(void *devt, void *osbuf, HTC_ENDPOINT_ID eid);
 void ar6000_connect_event(struct ar6_softc *ar, A_UINT16 channel,
                           A_UINT8 *bssid, A_UINT16 listenInterval,
                           A_UINT16 beaconInterval, NETWORK_TYPE networkType,
@@ -54,6 +54,7 @@ void ar6000_rssiThreshold_event(struct ar6_softc *ar,
 void ar6000_reportError_event(struct ar6_softc *, WMI_TARGET_ERROR_VAL errorVal);
 void ar6000_cac_event(struct ar6_softc *ar, A_UINT8 ac, A_UINT8 cac_indication,
                                 A_UINT8 statusCode, A_UINT8 *tspecSuggestion);
+void ar6000_channel_change_event(struct ar6_softc *ar, A_UINT16 oldChannel, A_UINT16 newChannel);
 void ar6000_hbChallengeResp_event(struct ar6_softc *, A_UINT32 cookie, A_UINT32 source);
 void
 ar6000_roam_tbl_event(struct ar6_softc *ar, WMI_TARGET_ROAM_TBL *pTbl);
@@ -66,7 +67,7 @@ ar6000_wow_list_event(struct ar6_softc *ar, A_UINT8 num_filters,
                       WMI_GET_WOW_LIST_REPLY *wow_reply);
 
 void ar6000_pmkid_list_event(void *devt, A_UINT8 numPMKID,
-                             WMI_PMKID *pmkidList);
+                             WMI_PMKID *pmkidList, A_UINT8 *bssidList);
 
 void ar6000_gpio_intr_rx(A_UINT32 intr_mask, A_UINT32 input_values);
 void ar6000_gpio_data_rx(A_UINT32 reg_id, A_UINT32 value);
@@ -76,6 +77,7 @@ void ar6000_dbglog_init_done(struct ar6_softc *ar);
 
 #ifdef SEND_EVENT_TO_APP
 void ar6000_send_event_to_app(struct ar6_softc *ar, A_UINT16 eventId, A_UINT8 *datap, int len);
+void ar6000_send_generic_event_to_app(struct ar6_softc *ar, A_UINT16 eventId, A_UINT8 *datap, int len);
 #endif
 
 #ifdef CONFIG_HOST_TCMD_SUPPORT
@@ -103,7 +105,11 @@ void ar6000_dbglog_event(struct ar6_softc *ar, A_UINT32 dropped,
 
 int ar6000_dbglog_get_debug_logs(struct ar6_softc *ar);
 
+void ar6000_peer_event(void *devt, A_UINT8 eventCode, A_UINT8 *bssid);
+
 void ar6000_indicate_tx_activity(void *devt, A_UINT8 trafficClass, A_BOOL Active);
+HTC_ENDPOINT_ID  ar6000_ac2_endpoint_id ( void * devt, A_UINT8 ac);
+A_UINT8 ar6000_endpoint_id2_ac (void * devt, HTC_ENDPOINT_ID ep );
 
 void ar6000_dset_open_req(void *devt,
                           A_UINT32 id,
@@ -120,6 +126,27 @@ void ar6000_dset_data_req(void *devt,
                           A_UINT32 targ_reply_arg);
 
 
+#if defined(CONFIG_TARGET_PROFILE_SUPPORT)
+void prof_count_rx(unsigned int addr, unsigned int count);
+#endif
+
+A_UINT32 ar6000_getnodeAge (void);
+
+A_UINT32 ar6000_getclkfreq (void);
+
+int ar6000_ap_mode_profile_commit(struct ar6_softc *ar);
+
+struct ieee80211req_wpaie;
+A_STATUS
+ar6000_ap_mode_get_wpa_ie(struct ar6_softc *ar, struct ieee80211req_wpaie *wpaie);
+
+A_STATUS is_iwioctl_allowed(A_UINT8 mode, A_UINT16 cmd);
+
+A_STATUS is_xioctl_allowed(A_UINT8 mode, int cmd);
+
+void ar6000_pspoll_event(struct ar6_softc *ar,A_UINT8 aid);
+
+void ar6000_dtimexpiry_event(struct ar6_softc *ar);
 
 #ifdef __cplusplus
 }

@@ -1,22 +1,23 @@
-/*
- *
- * Copyright (c) 2007 Atheros Communications Inc.
- * All rights reserved.
- *
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  published by the Free Software Foundation;
- *
- *  Software distributed under the License is distributed on an "AS
- *  IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
- *  implied. See the License for the specific language governing
- *  rights and limitations under the License.
- *
- *
- *
- */
-
+//------------------------------------------------------------------------------
+// <copyright file="ar6k.h" company="Atheros">
+//    Copyright (c) 2007-2008 Atheros Corporation.  All rights reserved.
+// 
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License version 2 as
+// published by the Free Software Foundation;
+//
+// Software distributed under the License is distributed on an "AS
+// IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// rights and limitations under the License.
+//
+//
+//------------------------------------------------------------------------------
+//==============================================================================
+// AR6K device layer that handles register level I/O
+//
+// Author(s): ="Atheros"
+//==============================================================================
 #ifndef AR6K_H_
 #define AR6K_H_
 
@@ -64,10 +65,16 @@ typedef PREPACK struct _AR6K_IRQ_ENABLE_REGISTERS {
 #define AR6K_MAX_REG_IO_BUFFERS     8
 
 /* buffers for ASYNC I/O */
-typedef struct AR6K_ASYNC_REG_IO_BUFFER {
+typedef struct _AR6K_ASYNC_REG_IO_BUFFER {
     HTC_PACKET    HtcPacket;   /* we use an HTC packet as a wrapper for our async register-based I/O */
     A_UINT8       Buffer[AR6K_REG_IO_BUFFER_SIZE];
 } AR6K_ASYNC_REG_IO_BUFFER;
+
+typedef enum _AR6K_TARGET_FAILURE_TYPE {
+    AR6K_TARGET_ASSERT = 1,
+    AR6K_TARGET_RX_ERROR,
+    AR6K_TARGET_TX_ERROR   
+} AR6K_TARGET_FAILURE_TYPE;
 
 typedef struct _AR6K_DEVICE {
     A_MUTEX_T                   Lock;
@@ -81,15 +88,17 @@ typedef struct _AR6K_DEVICE {
     void                        *HTCContext;
     HTC_PACKET_QUEUE            RegisterIOList;
     AR6K_ASYNC_REG_IO_BUFFER    RegIOBuffers[AR6K_MAX_REG_IO_BUFFERS];
-    void                        (*TargetFailureCallback)(void *Context);
-    A_STATUS                    (*MessagePendingCallback)(void *Context, A_UINT32 LookAhead, A_BOOL *pAsyncProc);
+    void                        (*TargetFailureCallback)(void *Context, AR6K_TARGET_FAILURE_TYPE Type);
+    A_STATUS                    (*MessagePendingCallback)(void *Context, A_UINT32 *LookAhead, A_BOOL *pAsyncProc);
     HIF_DEVICE_IRQ_PROCESSING_MODE  HifIRQProcessingMode;
     HIF_MASK_UNMASK_RECV_EVENT      HifMaskUmaskRecvEvent;
+    A_BOOL                          HifAttached;
 } AR6K_DEVICE;
 
 #define IS_DEV_IRQ_PROCESSING_ASYNC_ALLOWED(pDev) ((pDev)->HifIRQProcessingMode != HIF_DEVICE_IRQ_SYNC_ONLY)
 
 A_STATUS DevSetup(AR6K_DEVICE *pDev);
+void     DevCleanup(AR6K_DEVICE *pDev);
 A_STATUS DevUnmaskInterrupts(AR6K_DEVICE *pDev);
 A_STATUS DevMaskInterrupts(AR6K_DEVICE *pDev);
 A_STATUS DevPollMboxMsgRecv(AR6K_DEVICE *pDev,
@@ -107,6 +116,8 @@ void     DevDumpRegisters(AR6K_IRQ_PROC_REGISTERS   *pIrqProcRegs,
 #define DEV_ENABLE_RECV_SYNC  FALSE
 A_STATUS DevStopRecv(AR6K_DEVICE *pDev, A_BOOL ASyncMode);
 A_STATUS DevEnableRecv(AR6K_DEVICE *pDev, A_BOOL ASyncMode);
+A_STATUS DevEnableInterrupts(AR6K_DEVICE *pDev);
+A_STATUS DevDisableInterrupts(AR6K_DEVICE *pDev);
 
 static INLINE A_STATUS DevSendPacket(AR6K_DEVICE *pDev, HTC_PACKET *pPacket, A_UINT32 SendLength) {
     A_UINT32 paddedLength;

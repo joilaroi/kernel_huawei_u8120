@@ -1,10 +1,21 @@
-/*
- * Copyright (c) 2004-2007 Atheros Communications Inc.
- * All rights reserved.
- *
- * $ATH_LICENSE_HOSTSDK0_C$
- *
- */
+//------------------------------------------------------------------------------
+// <copyright file="targaddrs.h" company="Atheros">
+//    Copyright (c) 2004-2007 Atheros Corporation.  All rights reserved.
+// 
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License version 2 as
+// published by the Free Software Foundation;
+//
+// Software distributed under the License is distributed on an "AS
+// IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// rights and limitations under the License.
+//
+//
+//------------------------------------------------------------------------------
+//==============================================================================
+// Author(s): ="Atheros"
+//==============================================================================
 
 #ifndef __TARGADDRS_H__
 #define __TARGADDRS_H__
@@ -15,7 +26,7 @@
 #include "AR6002/addrs.h"
 #endif
 
-/*
+/* 
  * AR6K option bits, to enable/disable various features.
  * By default, all option bits are 0.
  * These bits can be set in LOCAL_SCRATCH register 0.
@@ -37,9 +48,15 @@
  * Host Interest is shared between Host and Target in order to coordinate
  * between the two, and is intended to remain constant (with additions only
  * at the end) across software releases.
+ *
+ * All addresses are available here so that it's possible to
+ * write a single binary that works with all Target Types.
+ * May be used in assembler code as well as C.
  */
-#define AR6001_HOST_INTEREST_ADDRESS     0x80000600
-#define AR6002_HOST_INTEREST_ADDRESS     0x00500400
+#define AR6001_HOST_INTEREST_ADDRESS    0x80000600
+#define AR6002_HOST_INTEREST_ADDRESS    0x00500400
+#define AR6003_HOST_INTEREST_ADDRESS    0x00540400
+
 
 #define HOST_INTEREST_MAX_SIZE          0x100
 
@@ -47,7 +64,7 @@
 struct register_dump_s;
 struct dbglog_hdr_s;
 
-/*
+/* 
  * These are items that the Host may need to access
  * via BMI or via the Diagnostic Window. The position
  * of items in this structure must remain constant
@@ -132,14 +149,26 @@ struct host_interest_s {
     A_UINT32               hi_end_RAM_reserve_sz;                     /* 0x68 */
     A_UINT32               hi_mbox_io_block_sz;                       /* 0x6c */
 
-    A_UINT32               hi_num_bpatch_streams;                     /* 0x70 */
+    A_UINT32               hi_num_bpatch_streams;                     /* 0x70 -- unused */
     A_UINT32               hi_mbox_isr_yield_limit;                   /* 0x74 */
 
     A_UINT32               hi_refclk_hz;                              /* 0x78 */
+    A_UINT32               hi_ext_clk_detected;                       /* 0x7c */
 };
 
 /* Bits defined in hi_option_flag */
-#define HI_OPTION_TIMER_WAR     1 /* not really used */
+#define HI_OPTION_TIMER_WAR      0x01 /* Enable timer workaround */
+#define HI_OPTION_BMI_CRED_LIMIT 0x02 /* Limit BMI command credits */
+#define HI_OPTION_RELAY_DOT11_HDR 0x04 /*Relay Dot11 hdr to/from host */
+
+/* 2 bits of hi_option_flag are used to represent 3 modes */
+#define HI_OPTION_FW_MODE_IBSS    0x0 /* IBSS Mode */
+#define HI_OPTION_FW_MODE_BSS_STA    0x1 /* STA Mode */
+#define HI_OPTION_FW_MODE_AP    0x2 /* AP Mode */
+
+/* Fw Mode Mask */
+#define HI_OPTION_FW_MODE_MASK    0x3
+#define HI_OPTION_FW_MODE_SHIFT   0x3
 
 /*
  * Intended for use by Host software, this macro returns the Target RAM
@@ -151,6 +180,17 @@ struct host_interest_s {
 
 #define AR6002_HOST_INTEREST_ITEM_ADDRESS(item) \
     ((A_UINT32)&((((struct host_interest_s *)(AR6002_HOST_INTEREST_ADDRESS))->item)))
+
+#define AR6003_HOST_INTEREST_ITEM_ADDRESS(item) \
+    ((A_UINT32)&((((struct host_interest_s *)(AR6003_HOST_INTEREST_ADDRESS))->item)))
+
+/* Convert a Target virtual address into a Target physical address */
+#define AR6001_VTOP(vaddr) ((vaddr) & 0x0fffffff)
+#define AR6002_VTOP(vaddr) ((vaddr) & 0x001fffff)
+#define AR6003_VTOP(vaddr) ((vaddr) & 0x001fffff)
+#define TARG_VTOP(TargetType, vaddr) \
+        (((TargetType) == TARGET_TYPE_AR6001) ? AR6001_VTOP(vaddr) : \
+        (((TargetType) == TARGET_TYPE_AR6002) ? AR6002_VTOP(vaddr) : AR6003_VTOP(vaddr)))
 
 
 #endif /* !__ASSEMBLER__ */

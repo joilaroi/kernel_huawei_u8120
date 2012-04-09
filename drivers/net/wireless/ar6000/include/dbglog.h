@@ -1,13 +1,21 @@
-/*
- * Copyright (c) 2004-2007 Atheros Communications Inc.
- * All rights reserved.
- *
- * $ATH_LICENSE_HOSTSDK0_C$
- *
- * This file contains the definitions and data structures associated with
- * the log based debug mechanism.
- *
- */
+//------------------------------------------------------------------------------
+// <copyright file="dbglog.h" company="Atheros">
+//    Copyright (c) 2004-2007 Atheros Corporation.  All rights reserved.
+// 
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License version 2 as
+// published by the Free Software Foundation;
+//
+// Software distributed under the License is distributed on an "AS
+// IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// rights and limitations under the License.
+//
+//
+//------------------------------------------------------------------------------
+//==============================================================================
+// Author(s): ="Atheros"
+//==============================================================================
 
 #ifndef _DBGLOG_H_
 #define _DBGLOG_H_
@@ -29,7 +37,7 @@ extern "C" {
 
 /*
  * Please ensure that the definition of any new module intrduced is captured
- * between the DBGLOG_MODULEID_START and DBGLOG_MODULEID_END defines. The
+ * between the DBGLOG_MODULEID_START and DBGLOG_MODULEID_END defines. The 
  * structure is required for the parser to correctly pick up the values for
  * different modules.
  */
@@ -43,6 +51,13 @@ extern "C" {
 #define DBGLOG_MODULEID_TXRX_RXBUF            6
 #define DBGLOG_MODULEID_WOW                   7
 #define DBGLOG_MODULEID_WHAL                  8
+#define DBGLOG_MODULEID_DC                    9
+#define DBGLOG_MODULEID_CO                    10
+#define DBGLOG_MODULEID_RO                    11
+#define DBGLOG_MODULEID_CM                    12
+#define DBGLOG_MODULEID_PY                    13
+#define DBGLOG_MODULEID_TMR                   14
+#define DBGLOG_MODULEID_BTCOEX                15
 #define DBGLOG_MODULEID_END
 
 #define DBGLOG_NUM_ARGS_OFFSET             30
@@ -62,7 +77,7 @@ extern "C" {
 #define DBGLOG_REPORT_SIZE_MASK            0x3FF00000
 
 #define DBGLOG_LOG_BUFFER_SIZE             1500
-#define DBGLOG_DBGID_DEFINITION_LEN_MAX    64
+#define DBGLOG_DBGID_DEFINITION_LEN_MAX    90
 
 struct dbglog_buf_s {
     struct dbglog_buf_s *next;

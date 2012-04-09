@@ -1,19 +1,19 @@
 /*
- * Copyright (c) 2004-2006 Atheros Communications Inc.
+ * Copyright (c) 2004-2009 Atheros Communications Inc.
  * All rights reserved.
  *
  *
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  published by the Free Software Foundation;
- *
- *  Software distributed under the License is distributed on an "AS
- *  IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
- *  implied. See the License for the specific language governing
- *  rights and limitations under the License.
- *
- *
+ * 
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License version 2 as
+// published by the Free Software Foundation;
+//
+// Software distributed under the License is distributed on an "AS
+// IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// rights and limitations under the License.
+//
+//
  *
  */
 
@@ -36,17 +36,17 @@ extern "C" {
 
 /* Linux standard Wireless Extensions, private ioctl interfaces */
 #define IEEE80211_IOCTL_SETPARAM             (SIOCIWFIRSTPRIV+0)
-#define IEEE80211_IOCTL_GETPARAM             (SIOCIWFIRSTPRIV+1)
-#define IEEE80211_IOCTL_SETKEY               (SIOCIWFIRSTPRIV+2)
-#define IEEE80211_IOCTL_SETWMMPARAMS         (SIOCIWFIRSTPRIV+3)
-#define IEEE80211_IOCTL_DELKEY               (SIOCIWFIRSTPRIV+4)
-#define IEEE80211_IOCTL_GETWMMPARAMS         (SIOCIWFIRSTPRIV+5)
-#define IEEE80211_IOCTL_SETOPTIE             (SIOCIWFIRSTPRIV+6)
-#define IEEE80211_IOCTL_SETMLME              (SIOCIWFIRSTPRIV+7)
-//#define IEEE80211_IOCTL_GETOPTIE             (SIOCIWFIRSTPRIV+7)
-#define IEEE80211_IOCTL_ADDPMKID             (SIOCIWFIRSTPRIV+8)
+#define IEEE80211_IOCTL_SETKEY               (SIOCIWFIRSTPRIV+1)
+#define IEEE80211_IOCTL_DELKEY               (SIOCIWFIRSTPRIV+2)
+#define IEEE80211_IOCTL_SETMLME              (SIOCIWFIRSTPRIV+3)
+#define IEEE80211_IOCTL_ADDPMKID             (SIOCIWFIRSTPRIV+4)
+#define IEEE80211_IOCTL_SETOPTIE             (SIOCIWFIRSTPRIV+5)
+//#define IEEE80211_IOCTL_GETPARAM             (SIOCIWFIRSTPRIV+6)
+//#define IEEE80211_IOCTL_SETWMMPARAMS         (SIOCIWFIRSTPRIV+7)
+//#define IEEE80211_IOCTL_GETWMMPARAMS         (SIOCIWFIRSTPRIV+8)
+//#define IEEE80211_IOCTL_GETOPTIE             (SIOCIWFIRSTPRIV+9)
 //#define IEEE80211_IOCTL_SETAUTHALG           (SIOCIWFIRSTPRIV+10)
-#define IEEE80211_IOCTL_LASTONE              (SIOCIWFIRSTPRIV+9)
+#define IEEE80211_IOCTL_LASTONE              (SIOCIWFIRSTPRIV+10)
 
 
 
@@ -59,34 +59,34 @@ extern "C" {
  * to the Target.
  */
 
-#define AR6000_IOCTL_WMI_GETREV              (SIOCIWFIRSTPRIV+10)
+#define AR6000_IOCTL_WMI_GETREV              (SIOCIWFIRSTPRIV+11)
 /*
  * arguments:
  *   ar6000_version *revision
  */
 
-#define AR6000_IOCTL_WMI_SETPWR              (SIOCIWFIRSTPRIV+11)
+#define AR6000_IOCTL_WMI_SETPWR              (SIOCIWFIRSTPRIV+12)
 /*
  * arguments:
  *   WMI_POWER_MODE_CMD pwrModeCmd (see include/wmi.h)
  * uses: WMI_SET_POWER_MODE_CMDID
  */
 
-#define AR6000_IOCTL_WMI_SETSCAN             (SIOCIWFIRSTPRIV+12)
+#define AR6000_IOCTL_WMI_SETSCAN             (SIOCIWFIRSTPRIV+13)
 /*
  * arguments:
  *   WMI_SCAN_PARAMS_CMD scanParams (see include/wmi.h)
  * uses: WMI_SET_SCAN_PARAMS_CMDID
  */
 
-#define AR6000_IOCTL_WMI_SETLISTENINT        (SIOCIWFIRSTPRIV+13)
+#define AR6000_IOCTL_WMI_SETLISTENINT        (SIOCIWFIRSTPRIV+14)
 /*
  * arguments:
  *   UINT32 listenInterval
  * uses: WMI_SET_LISTEN_INT_CMDID
  */
 
-#define AR6000_IOCTL_WMI_SETBSSFILTER        (SIOCIWFIRSTPRIV+14)
+#define AR6000_IOCTL_WMI_SETBSSFILTER        (SIOCIWFIRSTPRIV+15)
 /*
  * arguments:
  *   WMI_BSS_FILTER filter (see include/wmi.h)
@@ -424,10 +424,10 @@ extern "C" {
  * uses: WMI_OPT_TX_FRAME_CMDID
  */
 
-#define AR6000_XIOCTL_SET_ADHOC_BEACON_INTVAL                   27
+#define AR6000_XIOCTL_SET_BEACON_INTVAL                         27
 /*
  * arguments:
- *   UINT32 cmd (AR6000_XIOCTL_SET_ADHOC_BEACON_INTVAL)
+ *   UINT32 cmd (AR6000_XIOCTL_SET_BEACON_INTVAL)
  *   WMI_BEACON_INT_CMD beaconIntCmd (see include/wmi.h)
  * uses: WMI_SET_BEACON_INT_CMDID
  */
@@ -713,7 +713,7 @@ typedef enum {
 
 #define AR6000_XIOCTL_DBGLOG_GET_DEBUG_LOGS         68
 
-#define AR6000_XIOCTL_WMI_SET_WSC_STATUS    		70
+#define AR6000_XIOCTL_WMI_SET_WSC_STATUS            70
 /*
  * arguments:
  *      A_UINT32 wsc_status;
@@ -816,15 +816,107 @@ typedef enum {
  * uses: WMI_SET_PMKIDLIST_CMD
  */
 
+#define AR6000_XIOCTL_WMI_SET_PARAMS                85
+#define AR6000_XIOCTL_WMI_SET_MCAST_FILTER     86
+#define AR6000_XIOCTL_WMI_DEL_MCAST_FILTER     87
+
+
 /* Historical DSETPATCH support for INI patches */
 #define AR6000_XIOCTL_UNUSED90                      90
 
 
+/* Support LZ-compressed firmware download */
+#define AR6000_XIOCTL_BMI_LZ_STREAM_START           91
+/*
+ * arguments:
+ *   UINT32 cmd (AR6000_XIOCTL_BMI_LZ_STREAM_START)
+ *   UINT32 address
+ * uses: BMI_LZ_STREAM_START
+ */
+
+#define AR6000_XIOCTL_BMI_LZ_DATA                   92
+/*
+ * arguments:
+ *   UINT32 cmd (AR6000_XIOCTL_BMI_LZ_DATA)
+ *   UINT32 length
+ *   char data[length]
+ * uses: BMI_LZ_DATA
+ */
+
+#define AR6000_XIOCTL_PROF_CFG                      93
+/*
+ * arguments:
+ *   A_UINT32 period
+ *   A_UINT32 nbins
+ */
+
+#define AR6000_XIOCTL_PROF_ADDR_SET                 94
+/*
+ * arguments:
+ *   A_UINT32 Target address
+ */
+
+#define AR6000_XIOCTL_PROF_START                    95
+
+#define AR6000_XIOCTL_PROF_STOP                     96
+
+#define AR6000_XIOCTL_PROF_COUNT_GET                97
+
+#define AR6000_XIOCTL_WMI_ABORT_SCAN                98
+
+/*
+ * AP mode
+ */
+#define AR6000_XIOCTL_AP_GET_STA_LIST               99
+
+#define AR6000_XIOCTL_AP_HIDDEN_SSID                100
+
+#define AR6000_XIOCTL_AP_SET_NUM_STA                101
+
+#define AR6000_XIOCTL_AP_SET_ACL_MAC                102
+
+#define AR6000_XIOCTL_AP_GET_ACL_LIST               103
+
+#define AR6000_XIOCTL_AP_COMMIT_CONFIG              104
+
+#define IEEE80211_IOCTL_GETWPAIE                    105
+
+#define AR6000_XIOCTL_AP_CONN_INACT_TIME            106
+
+#define AR6000_XIOCTL_AP_PROT_SCAN_TIME             107
+
+#define AR6000_XIOCTL_AP_SET_COUNTRY                108
+
+#define AR6000_XIOCTL_AP_SET_DTIM                   109
+
+
+
+
+#define AR6000_XIOCTL_WMI_TARGET_EVENT_REPORT       110
+
+#define AR6000_XIOCTL_SET_IP                        111
+
+#define AR6000_XIOCTL_AP_SET_ACL_POLICY             112
+
+#define AR6000_XIOCTL_AP_INTRA_BSS_COMM             113
+
+#define AR6000_XIOCTL_AP_GET_HIDDEN_SSID            114
+
+#define AR6000_XIOCTL_AP_GET_COUNTRY                115
+
+#define AR6000_XIOCTL_AP_GET_WMODE                  116
+
+#define AR6000_XIOCTL_AP_GET_DTIM                   117
+
+#define AR6000_XIOCTL_AP_GET_BINTVL                 118
+
+#define AR6000_XIOCTL_AP_GET_RTS                    119
 
 /* used by AR6000_IOCTL_WMI_GETREV */
 struct ar6000_version {
     A_UINT32        host_ver;
     A_UINT32        target_ver;
+    A_UINT32        wlan_ver;
 };
 
 /* used by AR6000_IOCTL_WMI_GET_QOS_QUEUE */
@@ -849,8 +941,9 @@ typedef struct targetStats_t {
     A_UINT64    tx_errors;
     A_UINT64    tx_failed_cnt;
     A_UINT64    tx_retry_cnt;
+    A_UINT64    tx_mult_retry_cnt;
     A_UINT64    tx_rts_fail_cnt;
-    A_INT32     tx_unicast_rate;
+
     A_UINT64    rx_packets;
     A_UINT64    rx_bytes;
     A_UINT64    rx_unicast_pkts;
@@ -866,7 +959,6 @@ typedef struct targetStats_t {
     A_UINT64    rx_key_cache_miss;
     A_UINT64    rx_decrypt_err;
     A_UINT64    rx_duplicate_frames;
-    A_INT32     rx_unicast_rate;
 
     A_UINT64    tkip_local_mic_failure;
     A_UINT64    tkip_counter_measures_invoked;
@@ -876,25 +968,33 @@ typedef struct targetStats_t {
     A_UINT64    ccmp_replays;
 
     A_UINT64    power_save_failure_cnt;
-    A_INT16     noise_floor_calibation;
 
     A_UINT64    cs_bmiss_cnt;
     A_UINT64    cs_lowRssi_cnt;
     A_UINT64    cs_connect_cnt;
     A_UINT64    cs_disconnect_cnt;
-    A_UINT8     cs_aveBeacon_snr;
-    A_INT16     cs_aveBeacon_rssi;
-    A_UINT8     cs_lastRoam_msec;
-    A_UINT8     cs_snr;
-    A_INT16     cs_rssi;
+
+    A_INT32     tx_unicast_rate;
+    A_INT32     rx_unicast_rate;
 
     A_UINT32    lq_val;
 
     A_UINT32    wow_num_pkts_dropped;
-    A_UINT8     wow_num_host_pkt_wakeups;
-    A_UINT8     wow_num_host_event_wakeups;
     A_UINT16    wow_num_events_discarded;
 
+    A_INT16     noise_floor_calibation;
+    A_INT16     cs_rssi;
+    A_INT16     cs_aveBeacon_rssi;
+    A_UINT8     cs_aveBeacon_snr;
+    A_UINT8     cs_lastRoam_msec;
+    A_UINT8     cs_snr;
+
+    A_UINT8     wow_num_host_pkt_wakeups;
+    A_UINT8     wow_num_host_event_wakeups;
+
+    A_UINT32   arp_received;
+    A_UINT32   arp_matched;
+    A_UINT32   arp_replied;
 }TARGET_STATS;
 
 typedef struct targetStats_cmd_t {
@@ -985,6 +1085,12 @@ struct ar6000_diag_window_cmd_s {
 struct ar6000_traffic_activity_change {
     A_UINT32    StreamID;   /* stream ID to indicate activity change */
     A_UINT32    Active;     /* active (1) or inactive (0) */
+};
+
+/* Used with AR6000_XIOCTL_PROF_COUNT_GET */
+struct prof_count_s {
+    A_UINT32    addr;       /* bin start address */
+    A_UINT32    count;      /* hit count */
 };
 
 #ifdef __cplusplus

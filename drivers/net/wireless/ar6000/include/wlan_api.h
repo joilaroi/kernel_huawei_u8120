@@ -1,30 +1,30 @@
+//------------------------------------------------------------------------------
+// <copyright file="wlan_api.h" company="Atheros">
+//    Copyright (c) 2004-2008 Atheros Corporation.  All rights reserved.
+// 
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License version 2 as
+// published by the Free Software Foundation;
+//
+// Software distributed under the License is distributed on an "AS
+// IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// rights and limitations under the License.
+//
+//
+//------------------------------------------------------------------------------
+//==============================================================================
+// This file contains the API for the host wlan module
+//
+// Author(s): ="Atheros"
+//==============================================================================
 #ifndef _HOST_WLAN_API_H_
 #define _HOST_WLAN_API_H_
-/*
- * Copyright (c) 2004-2005 Atheros Communications Inc.
- * All rights reserved.
- *
- * This file contains the API for the host wlan module
- *
- * $Id: //depot/sw/releases/olca2.0-GPL/host/include/wlan_api.h#1 $
- *
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  published by the Free Software Foundation;
- *
- *  Software distributed under the License is distributed on an "AS
- *  IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
- *  implied. See the License for the specific language governing
- *  rights and limitations under the License.
- *
- *
- *
- */
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
 
 struct ieee80211_node_table;
 struct ieee80211_frame;
@@ -46,6 +46,14 @@ struct ieee80211_common_ie {
     A_UINT8     *ie_chswitch;
     A_UINT8     ie_erp;
     A_UINT8     *ie_wsc;
+#ifdef PYXIS_ADHOC
+    A_UINT8     *ie_pyxis;
+#endif
+/*BU5D02447,WIFI Module,hanshirong 66539,20100204 begin++ */
+#ifdef WAPI_ENABLE
+    A_UINT8     *ie_wapi;
+#endif /* WAPI_ENABLE */
+/*BU5D02447,WIFI Module,hanshirong 66539,20100204 end-- */
 };
 
 typedef struct bss {
@@ -61,7 +69,11 @@ typedef struct bss {
     struct ieee80211_node_table *ni_table;
     A_UINT32                     ni_refcnt;
     int                          ni_scangen;
+
     A_UINT32                     ni_tstamp;
+#ifdef OS_ROAM_MANAGEMENT
+    A_UINT32                     ni_si_gen;
+#endif
 } bss_t;
 
 typedef void wlan_node_iter_func(void *arg, bss_t *);
@@ -86,13 +98,17 @@ A_STATUS wlan_parse_beacon(A_UINT8 *buf, int framelen,
 A_UINT16 wlan_ieee2freq(int chan);
 A_UINT32 wlan_freq2ieee(A_UINT16 freq);
 
+void wlan_set_nodeage(struct ieee80211_node_table *nt, A_UINT32 nodeAge);
+
 
 bss_t *
 wlan_find_Ssidnode (struct ieee80211_node_table *nt, A_UCHAR *pSsid,
-					A_UINT32 ssidLength, A_BOOL bIsWPA2);
+                    A_UINT32 ssidLength, A_BOOL bIsWPA2, A_BOOL bMatchSSID);
 
 void
 wlan_node_return (struct ieee80211_node_table *nt, bss_t *ni);
+
+bss_t *wlan_node_remove(struct ieee80211_node_table *nt, A_UINT8 *bssid);
 
 #ifdef __cplusplus
 }

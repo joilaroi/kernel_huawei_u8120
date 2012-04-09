@@ -1,22 +1,23 @@
-/*
- * Copyright (c) 2004-2007 Atheros Communications Inc.
- * All rights reserved.
- *
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  published by the Free Software Foundation;
- *
- *  Software distributed under the License is distributed on an "AS
- *  IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
- *  implied. See the License for the specific language governing
- *  rights and limitations under the License.
- *
- *
- *
- * HIF specific declarations and prototypes
- */
-
+//------------------------------------------------------------------------------
+// <copyright file="hif.h" company="Atheros">
+//    Copyright (c) 2004-2008 Atheros Corporation.  All rights reserved.
+// 
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License version 2 as
+// published by the Free Software Foundation;
+//
+// Software distributed under the License is distributed on an "AS
+// IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// rights and limitations under the License.
+//
+//
+//------------------------------------------------------------------------------
+//==============================================================================
+// HIF specific declarations and prototypes
+//
+// Author(s): ="Atheros"
+//==============================================================================
 #ifndef _HIF_H_
 #define _HIF_H_
 
@@ -30,6 +31,7 @@ extern "C" {
 #include "a_types.h"
 #include "a_osapi.h"
 
+
 typedef struct htc_callbacks HTC_CALLBACKS;
 typedef struct hif_device HIF_DEVICE;
 
@@ -42,8 +44,10 @@ typedef struct hif_device HIF_DEVICE;
 
 /*
  *     type - An interface may support different kind of read/write commands.
- *            The command type is divided into a basic and an extended command
- *            and can be specified using HIF_BASIC_IO/HIF_EXTENDED_IO.
+ *            For example: SDIO supports CMD52/CMD53s. In case of MSIO it
+ *            translates to using different kinds of TPCs. The command type
+ *            is thus divided into a basic and an extended command and can
+ *            be specified using HIF_BASIC_IO/HIF_EXTENDED_IO.
  */
 #define HIF_BASIC_IO                0x00000004
 #define HIF_EXTENDED_IO             0x00000008
@@ -72,14 +76,14 @@ typedef struct hif_device HIF_DEVICE;
  *             to the nearest block size by padding. The size of the block is
  *             configurable at compile time using the HIF_BLOCK_SIZE and is
  *             negotiated with the target during initialization after the
- *             dragon interrupts are enabled.
+ *             AR6000 interrupts are enabled.
  */
 #define HIF_BYTE_BASIS              0x00000040
 #define HIF_BLOCK_BASIS             0x00000080
 #define HIF_DMODE_MASK              (HIF_BYTE_BASIS | HIF_BLOCK_BASIS)
 
 /*
- *     amode - This indicates if the address has to be incremented on dragon
+ *     amode - This indicates if the address has to be incremented on AR6000 
  *             after every read/write operation (HIF?FIXED_ADDRESS/
  *             HIF_INCREMENTAL_ADDRESS).
  */
@@ -122,6 +126,7 @@ typedef enum {
     HIF_DEVICE_GET_PENDING_EVENTS_FUNC,
     HIF_DEVICE_GET_IRQ_PROC_MODE,
     HIF_DEVICE_GET_RECV_EVENT_MASK_UNMASK_FUNC,
+    HIF_DEVICE_POWER_STATE_CHANGE,
 } HIF_DEVICE_CONFIG_OPCODE;
 
 /*
@@ -159,6 +164,16 @@ typedef enum {
  *          to mask receive message events.  The upper layer can call this pointer when it needs
  *          to mask/unmask receive events (in case it runs out of buffers).
  *
+ *   HIF_DEVICE_POWER_STATE_CHANGE
+ *
+ *   input : HIF_DEVICE_POWER_CHANGE_TYPE
+ *   output : none
+ *   note: this is optional for the HIF layer.  The HIF layer can handle power on/off state change
+ *         requests in an interconnect specific way.  This is highly OS and bus driver dependent.
+ *         The caller must guarantee that no HIF read/write requests will be made after the device
+ *         is powered down.
+ *
+ *
  *
  */
 
@@ -170,20 +185,32 @@ typedef enum {
                                    later time */
 } HIF_DEVICE_IRQ_PROCESSING_MODE;
 
+typedef enum {
+    HIF_DEVICE_POWER_UP,    /* HIF layer should power up interface and/or module */
+    HIF_DEVICE_POWER_DOWN,  /* HIF layer should initiate bus-specific measures to minimize power */
+    HIF_DEVICE_POWER_CUT    /* HIF layer should initiate bus-specific AND/OR platform-specific measures
+                               to completely power-off the module and associated hardware (i.e. cut power supplies)
+                            */
+} HIF_DEVICE_POWER_CHANGE_TYPE;
+
 #define HIF_MAX_DEVICES                 1
 
 struct htc_callbacks {
-    A_UCHAR *name;
-    A_UINT32 id;
-    A_STATUS (* deviceInsertedHandler)(void *hif_handle);
-    A_STATUS (* deviceRemovedHandler)(void *htc_handle, A_STATUS status);
-    A_STATUS (* deviceSuspendHandler)(void *htc_handle);
-    A_STATUS (* deviceResumeHandler)(void *htc_handle);
-    A_STATUS (* deviceWakeupHandler)(void *htc_handle);
-    A_STATUS (* rwCompletionHandler)(void *context, A_STATUS status);
-    A_STATUS (* dsrHandler)(void *htc_handle);
+    void      *context;     /* context to pass to the dsrhandler
+                               note : rwCompletionHandler is provided the context passed to HIFReadWrite  */
+    A_STATUS (* rwCompletionHandler)(void *rwContext, A_STATUS status);
+    A_STATUS (* dsrHandler)(void *context);
 };
 
+typedef struct osdrv_callbacks {
+    void      *context;     /* context to pass for all callbacks except deviceRemovedHandler 
+                               the deviceRemovedHandler is only called if the device is claimed */
+    A_STATUS (* deviceInsertedHandler)(void *context, void *hif_handle);
+    A_STATUS (* deviceRemovedHandler)(void *claimedContext, void *hif_handle);
+    A_STATUS (* deviceSuspendHandler)(void *context);
+    A_STATUS (* deviceResumeHandler)(void *context);
+    A_STATUS (* deviceWakeupHandler)(void *context);  
+} OSDRV_CALLBACKS;
 
 #define HIF_OTHER_EVENTS     (1 << 0)   /* other interrupts (non-Recv) are pending, host
                                            needs to read the register table to figure out what */
@@ -192,6 +219,7 @@ struct htc_callbacks {
 typedef struct _HIF_PENDING_EVENTS_INFO {
     A_UINT32 Events;
     A_UINT32 LookAhead;
+    A_UINT32 AvailableRecvBytes;
 } HIF_PENDING_EVENTS_INFO;
 
     /* function to get pending events , some HIF modules use special mechanisms
@@ -209,20 +237,28 @@ typedef A_STATUS ( *HIF_MASK_UNMASK_RECV_EVENT)(HIF_DEVICE  *device,
 
 
 /*
- * This API is used by the HTC layer to initialize the HIF layer and to
- * register different callback routines. Support for following events has
- * been captured - DSR, Read/Write completion, Device insertion/removal,
- * Device suspension/resumption/wakeup. In addition to this, the API is
- * also used to register the name and the revision of the chip. The latter
- * can be used to verify the revision of the chip read from the device
- * before reporting it to HTC.
+ * This API is used to perform any global initialization of the HIF layer
+ * and to set OS driver callbacks (i.e. insertion/removal) to the HIF layer
+ * 
  */
-int HIFInit(HTC_CALLBACKS *callbacks);
+A_STATUS HIFInit(OSDRV_CALLBACKS *callbacks);
+
+/* This API claims the HIF device and provides a context for handling removal.
+ * The device removal callback is only called when the OSDRV layer claims
+ * a device.  The claimed context must be non-NULL */
+void HIFClaimDevice(HIF_DEVICE *device, void *claimedContext);
+/* release the claimed device */
+void HIFReleaseDevice(HIF_DEVICE *device);
+
+/* This API allows the HTC layer to attach to the HIF device */
+A_STATUS HIFAttachHTC(HIF_DEVICE *device, HTC_CALLBACKS *callbacks);
+/* This API detaches the HTC layer from the HIF device */
+void     HIFDetachHTC(HIF_DEVICE *device);
 
 /*
  * This API is used to provide the read/write interface over the specific bus
  * interface.
- * address - Starting address in the dragon's address space. For mailbox
+ * address - Starting address in the AR6000's address space. For mailbox
  *           writes, it refers to the start of the mbox boundary. It should
  *           be ensured that the last byte falls on the mailbox's EOM. For
  *           mailbox reads, it refers to the end of the mbox boundary.
@@ -240,8 +276,8 @@ HIFReadWrite(HIF_DEVICE    *device,
              void          *context);
 
 /*
- * This can be initiated from the unload driver context ie when the HTCShutdown
- * routine is called.
+ * This can be initiated from the unload driver context when the OSDRV layer has no more use for
+ * the device.
  */
 void HIFShutDownDevice(HIF_DEVICE *device);
 
@@ -272,22 +308,9 @@ int HIFIRQEventNotify(void);
 
 int HIFRWCompleteEventNotify(void);
 
-/*
- * This function associates a opaque handle with the HIF layer
- * to be used in communication with upper layer i.e. HTC.
- * This would normaly be a pointer to htc_target data structure.
- */
-void HIFSetHandle(void *hif_handle, void *handle);
-
 A_STATUS
 HIFConfigureDevice(HIF_DEVICE *device, HIF_DEVICE_CONFIG_OPCODE opcode,
                    void *config, A_UINT32 configLen);
-
-
-struct device;
-struct device*
-HIFGetOSDevice(HIF_DEVICE *device);
-
 
 #ifdef __cplusplus
 }

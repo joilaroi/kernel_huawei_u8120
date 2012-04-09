@@ -1,55 +1,40 @@
-/*-
- * Copyright (c) 2001 Atsushi Onoe
- * Copyright (c) 2002-2004 Sam Leffler, Errno Consulting
- * Copyright (c) 2004-2005 Atheros Communications
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- * 3. The name of the author may not be used to endorse or promote products
- *    derived from this software without specific prior written permission.
- *
- * Alternatively, this software may be distributed under the terms of the
- * GNU General Public License ("GPL") version 2 as published by the Free
- * Software Foundation.
- *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
- * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
- * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $Id: //depot/sw/releases/olca2.0-GPL/host/wlan/src/wlan_node.c#1 $
- */
-/*
- * IEEE 802.11 node handling support.
- */
+//------------------------------------------------------------------------------
+// <copyright file="wlan_node.c" company="Atheros">
+//    Copyright (c) 2004-2008 Atheros Corporation.  All rights reserved.
+// 
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License version 2 as
+// published by the Free Software Foundation;
+//
+// Software distributed under the License is distributed on an "AS
+// IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// rights and limitations under the License.
+//
+//
+//------------------------------------------------------------------------------
+//==============================================================================
+// IEEE 802.11 node handling support.
+//
+// Author(s): ="Atheros"
+//==============================================================================
 #include <a_config.h>
 #include <athdefs.h>
 #include <a_types.h>
 #include <a_osapi.h>
 #include <a_debug.h>
+#include "htc.h"
+#include "htc_api.h"
+#include <wmi.h>
 #include <ieee80211.h>
 #include <wlan_api.h>
-#include <ieee80211_node.h>
-#include <htc_api.h>
-#include <wmi.h>
 #include <wmi_api.h>
+#include <ieee80211_node.h>
 
 static void wlan_node_timeout(A_ATH_TIMER arg);
-static bss_t * _ieee80211_find_node(struct ieee80211_node_table *nt,
-                                    const A_UINT8 *macaddr);
+
+static bss_t * _ieee80211_find_node (struct ieee80211_node_table *nt,
+                                     const A_UINT8 *macaddr);
 
 bss_t *
 wlan_node_alloc(struct ieee80211_node_table *nt, int wh_size)
@@ -59,11 +44,14 @@ wlan_node_alloc(struct ieee80211_node_table *nt, int wh_size)
     ni = A_MALLOC_NOWAIT(sizeof(bss_t));
 
     if (ni != NULL) {
+        if (wh_size)
+        {
         ni->ni_buf = A_MALLOC_NOWAIT(wh_size);
         if (ni->ni_buf == NULL) {
             A_FREE(ni);
             ni = NULL;
             return ni;
+        }
         }
     } else {
         return ni;
@@ -76,10 +64,14 @@ wlan_node_alloc(struct ieee80211_node_table *nt, int wh_size)
     ni->ni_hash_prev = NULL;
 
     //
-    // ni_scangen never initialized before and during suspend/resume of winmobile, customer (LG/SEMCO) identified
+    // ni_scangen never initialized before and during suspend/resume of winmobile,
     // that some junk has been stored in this, due to this scan list didn't properly updated
     //
-    ni->ni_scangen	 = 0;
+    ni->ni_scangen   = 0;
+
+#ifdef OS_ROAM_MANAGEMENT
+    ni->ni_si_gen    = 0;
+#endif
 
     return ni;
 }
@@ -98,12 +90,16 @@ wlan_setup_node(struct ieee80211_node_table *nt, bss_t *ni,
                 const A_UINT8 *macaddr)
 {
     int hash;
+    A_UINT32 timeoutValue = 0;
 
     A_MEMCPY(ni->ni_macaddr, macaddr, IEEE80211_ADDR_LEN);
-    hash = IEEE80211_NODE_HASH(macaddr);
-    ieee80211_node_initref(ni);     /* mark referenced */
+    hash = IEEE80211_NODE_HASH (macaddr);
+    ieee80211_node_initref (ni);     /* mark referenced */
 
-    ni->ni_tstamp = A_GET_MS(WLAN_NODE_INACT_TIMEOUT_MSEC);
+    timeoutValue = nt->nt_nodeAge;
+
+    ni->ni_tstamp = A_GET_MS (timeoutValue);
+
     IEEE80211_NODE_LOCK_BH(nt);
 
     /* Insert at the end of the node list */
@@ -128,7 +124,7 @@ wlan_setup_node(struct ieee80211_node_table *nt, bss_t *ni,
     nt->nt_hash[hash] = ni;
 
     if (!nt->isTimerArmed) {
-        A_TIMEOUT_MS(&nt->nt_inact_timer, WLAN_NODE_INACT_TIMEOUT_MSEC, 0);
+        A_TIMEOUT_MS(&nt->nt_inact_timer, timeoutValue, 0);
         nt->isTimerArmed = TRUE;
     }
 
@@ -271,17 +267,38 @@ wlan_node_table_init(void *wmip, struct ieee80211_node_table *nt)
     {
         nt->nt_hash[i] = NULL;
     }
+
     A_INIT_TIMER(&nt->nt_inact_timer, wlan_node_timeout, nt);
     nt->isTimerArmed = FALSE;
     nt->nt_wmip = wmip;
+    nt->nt_nodeAge = WLAN_NODE_INACT_TIMEOUT_MSEC;
+
+    //
+    // nt_scangen never initialized before and during suspend/resume of winmobile, 
+    // that some junk has been stored in this, due to this scan list didn't properly updated
+    //
+    nt->nt_scangen   = 0;
+
+#ifdef OS_ROAM_MANAGEMENT
+    nt->nt_si_gen    = 0;
+#endif
 }
 
+void
+wlan_set_nodeage(struct ieee80211_node_table *nt, A_UINT32 nodeAge)
+{
+    nt->nt_nodeAge = nodeAge;
+    return;
+}
 static void
-wlan_node_timeout(A_ATH_TIMER arg)
+wlan_node_timeout (A_ATH_TIMER arg)
 {
     struct ieee80211_node_table *nt = (struct ieee80211_node_table *)arg;
     bss_t *bss, *nextBss;
     A_UINT8 myBssid[IEEE80211_ADDR_LEN], reArmTimer = FALSE;
+    A_UINT32 timeoutValue = 0;
+
+    timeoutValue = nt->nt_nodeAge;
 
     wmi_get_current_bssid(nt->nt_wmip, myBssid);
 
@@ -311,8 +328,8 @@ wlan_node_timeout(A_ATH_TIMER arg)
         bss = nextBss;
     }
 
-    if(reArmTimer)
-        A_TIMEOUT_MS(&nt->nt_inact_timer, WLAN_NODE_INACT_TIMEOUT_MSEC, 0);
+    if (reArmTimer)
+        A_TIMEOUT_MS (&nt->nt_inact_timer, timeoutValue, 0);
 
     nt->isTimerArmed = reArmTimer;
 }
@@ -328,33 +345,43 @@ wlan_node_table_cleanup(struct ieee80211_node_table *nt)
 
 bss_t *
 wlan_find_Ssidnode (struct ieee80211_node_table *nt, A_UCHAR *pSsid,
-					A_UINT32 ssidLength, A_BOOL bIsWPA2)
+                    A_UINT32 ssidLength, A_BOOL bIsWPA2, A_BOOL bMatchSSID)
 {
     bss_t   *ni = NULL;
-	A_UCHAR *pIESsid = NULL;
+    A_UCHAR *pIESsid = NULL;
 
     IEEE80211_NODE_LOCK (nt);
 
     for (ni = nt->nt_node_first; ni; ni = ni->ni_list_next) {
-		pIESsid = ni->ni_cie.ie_ssid;
-		if (pIESsid[1] <= 32) {
+        pIESsid = ni->ni_cie.ie_ssid;
+        if (pIESsid[1] <= 32) {
 
-			// Step 1 : Check SSID
-			if (0x00 == memcmp (pSsid, &pIESsid[2], ssidLength)) {
+            // Step 1 : Check SSID
+            if (0x00 == memcmp (pSsid, &pIESsid[2], ssidLength)) {
 
-				// Step 2 : if SSID matches, check WPA or WPA2
-				if (TRUE == bIsWPA2 && NULL != ni->ni_cie.ie_rsn) {
-					ieee80211_node_incref (ni);  /* mark referenced */
-					IEEE80211_NODE_UNLOCK (nt);
-					return ni;
-				}
-				if (FALSE == bIsWPA2 && NULL != ni->ni_cie.ie_wpa) {
-					ieee80211_node_incref(ni);  /* mark referenced */
-					IEEE80211_NODE_UNLOCK (nt);
-					return ni;
-				}
-			}
-		}
+                //
+                // Step 2.1 : Check MatchSSID is TRUE, if so, return Matched SSID
+                // Profile, otherwise check whether WPA2 or WPA
+                //
+                if (TRUE == bMatchSSID) {
+                    ieee80211_node_incref (ni);  /* mark referenced */
+                    IEEE80211_NODE_UNLOCK (nt);
+                    return ni;
+                }
+
+                // Step 2 : if SSID matches, check WPA or WPA2
+                if (TRUE == bIsWPA2 && NULL != ni->ni_cie.ie_rsn) {
+                    ieee80211_node_incref (ni);  /* mark referenced */
+                    IEEE80211_NODE_UNLOCK (nt);
+                    return ni;
+                }
+                if (FALSE == bIsWPA2 && NULL != ni->ni_cie.ie_wpa) {
+                    ieee80211_node_incref(ni);  /* mark referenced */
+                    IEEE80211_NODE_UNLOCK (nt);
+                    return ni;
+                }
+            }
+        }
     }
 
     IEEE80211_NODE_UNLOCK (nt);
@@ -365,7 +392,75 @@ wlan_find_Ssidnode (struct ieee80211_node_table *nt, A_UCHAR *pSsid,
 void
 wlan_node_return (struct ieee80211_node_table *nt, bss_t *ni)
 {
-	IEEE80211_NODE_LOCK (nt);
-	wlan_node_dec_free (ni);
-	IEEE80211_NODE_UNLOCK (nt);
+    IEEE80211_NODE_LOCK (nt);
+    wlan_node_dec_free (ni);
+    IEEE80211_NODE_UNLOCK (nt);
+}
+
+void
+wlan_node_remove_core (struct ieee80211_node_table *nt, bss_t *ni)
+{
+    if(ni->ni_list_prev == NULL)
+    {
+        /* First in list so fix the list head */
+        nt->nt_node_first = ni->ni_list_next;
+    }
+    else
+    {
+        ni->ni_list_prev->ni_list_next = ni->ni_list_next;
+    }
+
+    if(ni->ni_list_next == NULL)
+    {
+        /* Last in list so fix list tail */
+        nt->nt_node_last = ni->ni_list_prev;
+    }
+    else
+    {
+        ni->ni_list_next->ni_list_prev = ni->ni_list_prev;
+    }
+
+    if(ni->ni_hash_prev == NULL)
+    {
+        /* First in list so fix the list head */
+        int hash;
+        hash = IEEE80211_NODE_HASH(ni->ni_macaddr);
+        nt->nt_hash[hash] = ni->ni_hash_next;
+    }
+    else
+    {
+        ni->ni_hash_prev->ni_hash_next = ni->ni_hash_next;
+    }
+
+    if(ni->ni_hash_next != NULL)
+    {
+        ni->ni_hash_next->ni_hash_prev = ni->ni_hash_prev;
+    }
+}
+
+bss_t *
+wlan_node_remove(struct ieee80211_node_table *nt, A_UINT8 *bssid)
+{
+    bss_t *bss, *nextBss;
+
+    IEEE80211_NODE_LOCK(nt);
+
+    bss = nt->nt_node_first;
+
+    while (bss != NULL)
+    {
+        nextBss = bss->ni_list_next;
+
+        if (A_MEMCMP(bssid, bss->ni_macaddr, 6) == 0)
+        {
+            wlan_node_remove_core (nt, bss);
+            IEEE80211_NODE_UNLOCK(nt);
+            return bss;
+        }
+
+        bss = nextBss;
+    }
+
+    IEEE80211_NODE_UNLOCK(nt);
+    return NULL;
 }

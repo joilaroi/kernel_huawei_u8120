@@ -1,23 +1,21 @@
-/*-
- * Copyright (c) 2001 Atsushi Onoe
- * Copyright (c) 2002-2004 Sam Leffler, Errno Consulting
- * Copyright (c) 2006 Atheros Communications, Inc.
- *
- * Wireless Network driver for Atheros AR6001
- * All rights reserved.
- *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
- * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
- * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- */
+//------------------------------------------------------------------------------
+// <copyright file="ieee80211.h" company="Atheros">
+//    Copyright (c) 2004-2008 Atheros Corporation.  All rights reserved.
+// 
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License version 2 as
+// published by the Free Software Foundation;
+//
+// Software distributed under the License is distributed on an "AS
+// IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// rights and limitations under the License.
+//
+//
+//------------------------------------------------------------------------------
+//==============================================================================
+// Author(s): ="Atheros"
+//==============================================================================
 #ifndef _NET80211_IEEE80211_H_
 #define _NET80211_IEEE80211_H_
 
@@ -26,12 +24,51 @@
 /*
  * 802.11 protocol definitions.
  */
+#define IEEE80211_WEP_KEYLEN        5   /* 40bit */
+#define IEEE80211_WEP_IVLEN         3   /* 24bit */
+#define IEEE80211_WEP_KIDLEN        1   /* 1 octet */
+#define IEEE80211_WEP_CRCLEN        4   /* CRC-32 */
+#define IEEE80211_WEP_NKID          4   /* number of key ids */
+
+/*
+ * 802.11i defines an extended IV for use with non-WEP ciphers.
+ * When the EXTIV bit is set in the key id byte an additional
+ * 4 bytes immediately follow the IV for TKIP.  For CCMP the
+ * EXTIV bit is likewise set but the 8 bytes represent the
+ * CCMP header rather than IV+extended-IV.
+ */
+#define IEEE80211_WEP_EXTIV         0x20
+#define IEEE80211_WEP_EXTIVLEN      4   /* extended IV length */
+#define IEEE80211_WEP_MICLEN        8   /* trailing MIC */
+
+#define IEEE80211_CRC_LEN           4
+
+/*BU5D02447,WIFI Module,hanshirong 66539,20100204 begin++ */
+#ifdef WAPI_ENABLE
+#define IEEE80211_WAPI_EXTIVLEN      10   /* extended IV length */
+#endif /* WAPI_ENABLE */
+/*BU5D02447,WIFI Module,hanshirong 66539,20100204 end-- */
+
 
 #define IEEE80211_ADDR_LEN  6       /* size of 802.11 address */
 /* is 802.11 address multicast/broadcast? */
 #define IEEE80211_IS_MULTICAST(_a)  (*(_a) & 0x01)
+#define IEEE80211_IS_BROADCAST(_a)  (*(_a) == 0xFF)
+#define WEP_HEADER (IEEE80211_WEP_IVLEN + IEEE80211_WEP_KIDLEN)
+#define WEP_TRAILER IEEE80211_WEP_CRCLEN
+#define CCMP_HEADER (IEEE80211_WEP_IVLEN + IEEE80211_WEP_KIDLEN + \
+                    IEEE80211_WEP_EXTIVLEN)
+#define CCMP_TRAILER IEEE80211_WEP_MICLEN
+#define TKIP_HEADER (IEEE80211_WEP_IVLEN + IEEE80211_WEP_KIDLEN + \
+                    IEEE80211_WEP_EXTIVLEN)
+#define TKIP_TRAILER IEEE80211_WEP_CRCLEN
+#define TKIP_MICLEN  IEEE80211_WEP_MICLEN
+
+
 #define IEEE80211_ADDR_EQ(addr1, addr2)     \
     (A_MEMCMP(addr1, addr2, IEEE80211_ADDR_LEN) == 0)
+
+#define IEEE80211_ADDR_COPY(dst,src)    A_MEMCPY(dst,src,IEEE80211_ADDR_LEN)
 
 #define IEEE80211_KEYBUF_SIZE 16
 #define IEEE80211_MICBUF_SIZE (8+8)  /* space for both tx and rx */
@@ -68,6 +105,16 @@ PREPACK struct ieee80211_frame {
     A_UINT8    i_seq[2];
     /* possibly followed by addr4[IEEE80211_ADDR_LEN]; */
     /* see below */
+} POSTPACK;
+
+PREPACK struct ieee80211_qosframe {
+    A_UINT8 i_fc[2];
+    A_UINT8 i_dur[2];
+    A_UINT8 i_addr1[IEEE80211_ADDR_LEN];
+    A_UINT8 i_addr2[IEEE80211_ADDR_LEN];
+    A_UINT8 i_addr3[IEEE80211_ADDR_LEN];
+    A_UINT8 i_seq[2];
+    A_UINT8 i_qos[2];
 } POSTPACK;
 
 #define IEEE80211_FC0_VERSION_MASK          0x03
@@ -188,6 +235,11 @@ enum {
     IEEE80211_ELEMID_ERP        = 42,
     IEEE80211_ELEMID_RSN        = 48,
     IEEE80211_ELEMID_XRATES     = 50,
+/*BU5D02447,WIFI Module,hanshirong 66539,20100204 begin++ */
+#ifdef WAPI_ENABLE
+    IEEE80211_ELEMID_WAPI       = 68,
+#endif /* WAPI_ENABLE */
+/*BU5D02447,WIFI Module,hanshirong 66539,20100204 end-- */
     IEEE80211_ELEMID_TPC        = 150,
     IEEE80211_ELEMID_CCKM       = 156,
     IEEE80211_ELEMID_VENDOR     = 221,  /* vendor private */
@@ -222,17 +274,22 @@ enum {
 #define RSN_CSE_CCMP        0x04
 #define RSN_CSE_WEP104      0x05
 
-#define RSN_ASE_NONE        0x00
+#define RSN_ASE_NONE            0x00
 #define RSN_ASE_8021X_UNSPEC    0x01
-#define RSN_ASE_8021X_PSK   0x02
+#define RSN_ASE_8021X_PSK       0x02
 
-#define RSN_CAP_PREAUTH     0x01
+#define RSN_CAP_PREAUTH         0x01
 
-#define WMM_OUI         0xf25000
-#define WMM_OUI_TYPE        0x02
+#define WMM_OUI                 0xf25000
+#define WMM_OUI_TYPE            0x02
 #define WMM_INFO_OUI_SUBTYPE    0x00
 #define WMM_PARAM_OUI_SUBTYPE   0x01
-#define WMM_VERSION     1
+#define WMM_VERSION             1
+
+#ifdef  PYXIS_ADHOC
+#define PYXIS_OUI             0xf25000        /* Pyxis OUI 00-50-F2*/
+#define PYXIS_OUI_TYPE        0x06
+#endif
 
 /* WMM stream classes */
 #define WMM_NUM_AC  4
@@ -258,6 +315,9 @@ typedef enum {
     TSPEC_STATUS_CODE_DELTS_SENT    = 0x30,
     TSPEC_STATUS_CODE_DELTS_RECV    = 0x31,
 } TSPEC_STATUS_CODE;
+
+#define TSPEC_TSID_MASK             0xF
+#define TSPEC_TSID_S                1
 
 /*
  * WMM/802.11e Tspec Element
@@ -336,6 +396,8 @@ enum ieee80211_authmode {
     IEEE80211_AUTH_WPA_PSK  = 6,  /* WPA/RSN  w/ PSK */
     IEEE80211_AUTH_WPA_CCKM = 7,  /* WPA/RSN IE  w/ CCKM */
 };
+
+#define IEEE80211_PS_MAX_QUEUE    50 /*Maximum no of buffers that can be queues for PS*/
 
 #include "athendpack.h"
 

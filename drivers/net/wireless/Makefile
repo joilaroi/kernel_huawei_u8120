@@ -64,5 +64,5 @@ obj-$(CONFIG_WL12XX)	+= wl12xx/
 obj-$(CONFIG_IWM)	+= iwmc3200wifi/
 
 obj-$(CONFIG_BCM4329)	+= bcm4329/
-obj-$(CONFIG_LIBRA_SDIOIF)	+= libra/
 obj-$(CONFIG_AR6000_WLAN) += ar6000/
+obj-$(CONFIG_LIBRA_SDIOIF)	+= libra/

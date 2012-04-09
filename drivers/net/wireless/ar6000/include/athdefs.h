@@ -1,12 +1,25 @@
+//------------------------------------------------------------------------------
+// <copyright file="athdefs.h" company="Atheros">
+//    Copyright (c) 2004-2007 Atheros Corporation.  All rights reserved.
+// 
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License version 2 as
+// published by the Free Software Foundation;
+//
+// Software distributed under the License is distributed on an "AS
+// IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// rights and limitations under the License.
+//
+//
+//------------------------------------------------------------------------------
+//==============================================================================
+// Author(s): ="Atheros"
+//==============================================================================
 #ifndef __ATHDEFS_H__
 #define __ATHDEFS_H__
 
 /*
- * Copyright (c) 2004-2007 Atheros Communications Inc.
- * All rights reserved.
- *
- * $ATH_LICENSE_HOSTSDK0_C$
- *
  * This file contains definitions that may be used across both
  * Host and Target software.  Nothing here is module-dependent
  * or platform-dependent.
@@ -63,23 +76,5 @@ ter (typically in callback) */
 #ifndef FALSE
 #define FALSE 0
 #endif
-
-/*
- * The following definition is WLAN specific definition
- */
-typedef enum {
-    MODE_11A = 0,   /* 11a Mode */
-    MODE_11G = 1,   /* 11g + 11b Mode */
-    MODE_11B = 2,   /* 11b Mode */
-    MODE_11GONLY = 3, /* 11g only Mode */
-    MODE_UNKNOWN = 4,
-    MODE_MAX = 4
-} WLAN_PHY_MODE;
-
-typedef enum {
-    WLAN_11A_CAPABILITY   = 1,
-    WLAN_11G_CAPABILITY   = 2,
-    WLAN_11AG_CAPABILITY  = 3,
-}WLAN_CAPABILITY;
 
 #endif /* __ATHDEFS_H__ */

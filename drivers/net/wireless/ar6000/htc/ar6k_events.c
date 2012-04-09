@@ -1,31 +1,36 @@
-/*
- * AR6K Driver layer event handling (i.e. interrupts, message polling)
- *
- * Copyright (c) 2007 Atheros Communications Inc.
- * All rights reserved.
- *
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  published by the Free Software Foundation;
- *
- *  Software distributed under the License is distributed on an "AS
- *  IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
- *  implied. See the License for the specific language governing
- *  rights and limitations under the License.
- *
- *
- *
- */
+//------------------------------------------------------------------------------
+// <copyright file="ar6k_events.c" company="Atheros">
+//    Copyright (c) 2007-2008 Atheros Corporation.  All rights reserved.
+// 
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License version 2 as
+// published by the Free Software Foundation;
+//
+// Software distributed under the License is distributed on an "AS
+// IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// rights and limitations under the License.
+//
+//
+//------------------------------------------------------------------------------
+//==============================================================================
+// AR6K Driver layer event handling (i.e. interrupts, message polling)
+//
+// Author(s): ="Atheros"
+//==============================================================================
 #include "a_config.h"
 #include "athdefs.h"
 #include "a_types.h"
-#include "AR6Khwreg.h"
+
+#include "hw/mbox_host_reg.h"
+#include "hw/rtc_reg.h"
+
 #include "a_osapi.h"
 #include "a_debug.h"
 #include "hif.h"
 #include "htc_packet.h"
 #include "ar6k.h"
+
 
 extern void AR6KFreeIOPacket(AR6K_DEVICE *pDev, HTC_PACKET *pPacket);
 extern HTC_PACKET *AR6KAllocIOPacket(AR6K_DEVICE *pDev);
@@ -59,7 +64,7 @@ A_STATUS DevPollMboxMsgRecv(AR6K_DEVICE *pDev,
     while (TRUE) {
 
         if (pDev->GetPendingEventsFunc != NULL)
-		{
+        {
 
             HIF_PENDING_EVENTS_INFO events;
 
@@ -69,21 +74,21 @@ A_STATUS DevPollMboxMsgRecv(AR6K_DEVICE *pDev,
                                             &events,
                                             NULL);
             if (A_FAILED(status))
-			{
+            {
                 AR_DEBUG_PRINTF(ATH_DEBUG_ERR,("Failed to get pending events \n"));
-				break;
+                break;
             }
 
             if (events.Events & HIF_RECV_MSG_AVAIL)
-			{
+            {
                     /*  there is a message available, the lookahead should be valid now */
                 *pLookAhead = events.LookAhead;
 
                 break;
             }
         }
-		else
-		{
+        else
+        {
 
                 /* this is the standard HIF way.... */
                 /* load the register table */
@@ -95,16 +100,16 @@ A_STATUS DevPollMboxMsgRecv(AR6K_DEVICE *pDev,
                                   NULL);
 
             if (A_FAILED(status))
-			{
+            {
                 AR_DEBUG_PRINTF(ATH_DEBUG_ERR,("Failed to read register table \n"));
                 break;
             }
 
                 /* check for MBOX data and valid lookahead */
             if (pDev->IrqProcRegisters.host_int_status & (1 << HTC_MAILBOX))
-			{
+            {
                 if (pDev->IrqProcRegisters.rx_lookahead_valid & (1 << HTC_MAILBOX))
-				{
+                {
                     /* mailbox has a message and the look ahead is valid */
                     *pLookAhead = pDev->IrqProcRegisters.rx_lookahead[HTC_MAILBOX];
                     break;
@@ -116,7 +121,7 @@ A_STATUS DevPollMboxMsgRecv(AR6K_DEVICE *pDev,
         timeout--;
 
         if (timeout <= 0)
-		{
+        {
             AR_DEBUG_PRINTF(ATH_DEBUG_ERR, (" Timeout waiting for recv message \n"));
             status = A_ERROR;
 
@@ -131,7 +136,7 @@ A_STATUS DevPollMboxMsgRecv(AR6K_DEVICE *pDev,
         }
 
             /* delay a little  */
-         msleep(DELAY_PER_INTERVAL_MS);
+         A_MDELAY(DELAY_PER_INTERVAL_MS);
          AR_DEBUG_PRINTF(ATH_DEBUG_RECV,("  Retry Mbox Poll : %d \n",timeout));
     }
 
@@ -186,10 +191,10 @@ static A_STATUS DevServiceErrorInterrupt(AR6K_DEVICE *pDev)
     A_UINT8  error_int_status;
     A_UINT8  regBuffer[4];
 
-    AR_DEBUG_PRINTF(ATH_DEBUG_IRQ, ("Error Interrupt\n"));
+    AR_DEBUG_PRINTF(ATH_DEBUG_ERR, ("Error Interrupt\n"));
     error_int_status = pDev->IrqProcRegisters.error_int_status & 0x0F;
     AR_DEBUG_ASSERT(error_int_status);
-    AR_DEBUG_PRINTF(ATH_DEBUG_IRQ,
+    AR_DEBUG_PRINTF(ATH_DEBUG_ERR,
                     ("Valid interrupt source(s) in ERROR_INT_STATUS: 0x%x\n",
                     error_int_status));
 
@@ -201,11 +206,17 @@ static A_STATUS DevServiceErrorInterrupt(AR6K_DEVICE *pDev)
     if (ERROR_INT_STATUS_RX_UNDERFLOW_GET(error_int_status)) {
         /* Rx Underflow */
         AR_DEBUG_PRINTF(ATH_DEBUG_ERR, ("Error : Rx Underflow\n"));
+        if (pDev->TargetFailureCallback != NULL) {
+            pDev->TargetFailureCallback(pDev->HTCContext, AR6K_TARGET_RX_ERROR);
+        }
     }
 
     if (ERROR_INT_STATUS_TX_OVERFLOW_GET(error_int_status)) {
         /* Tx Overflow */
         AR_DEBUG_PRINTF(ATH_DEBUG_ERR, ("Error : Tx Overflow\n"));
+        if (pDev->TargetFailureCallback != NULL) {
+            pDev->TargetFailureCallback(pDev->HTCContext, AR6K_TARGET_TX_ERROR);
+        }
     }
 
         /* Clear the interrupt */
@@ -242,7 +253,7 @@ static A_STATUS DevServiceDebugInterrupt(AR6K_DEVICE *pDev)
     AR_DEBUG_PRINTF(ATH_DEBUG_ERR, ("Target debug interrupt\n"));
 
     if (pDev->TargetFailureCallback != NULL) {
-        pDev->TargetFailureCallback(pDev->HTCContext);
+        pDev->TargetFailureCallback(pDev->HTCContext, AR6K_TARGET_ASSERT);
     }
 
     /* clear the interrupt , the debug error interrupt is
@@ -349,7 +360,7 @@ static void DevGetEventAsyncHandler(void *Context, HTC_PACKET *pPacket)
                     lookAhead));
                 /* lookahead is non-zero and there are no other interrupts to service,
                  * go get the next message */
-            pDev->MessagePendingCallback(pDev->HTCContext, lookAhead, NULL);
+            pDev->MessagePendingCallback(pDev->HTCContext, &lookAhead, NULL);
         }
 
     } while (FALSE);
@@ -436,6 +447,13 @@ static A_STATUS ProcessPendingIRQs(AR6K_DEVICE *pDev, A_BOOL *pDone, A_BOOL *pAS
      *         This is a fully schedulable context.
      * */
     do {
+
+        if (pDev->IrqEnableRegisters.int_status_enable == 0) {
+            /* interrupt enables have been cleared, do not try to process any pending interrupts that
+             * may result in more bus transactions.  The target may be unresponsive at this
+             * point. */
+             break;
+        }
 
         if (pDev->GetPendingEventsFunc != NULL) {
             HIF_PENDING_EVENTS_INFO events;
@@ -544,9 +562,14 @@ static A_STATUS ProcessPendingIRQs(AR6K_DEVICE *pDev, A_BOOL *pDone, A_BOOL *pAS
                  * When emptying the recv mailbox we use the async handler above called from the
                  * completion routine of the callers read request. This can improve performance
                  * by reducing context switching when we rapidly pull packets */
-            status = pDev->MessagePendingCallback(pDev->HTCContext, lookAhead, pASyncProcessing);
+            status = pDev->MessagePendingCallback(pDev->HTCContext, &lookAhead, pASyncProcessing);
             if (A_FAILED(status)) {
                 break;
+            }
+            /* if sync processing of Rx packets is enabled and lookahead of last packet is 0, then
+             * we can avoid extra CMD53 16-byte read above by setting pDone = TRUE */
+            if ((lookAhead == 0) && (*pASyncProcessing == FALSE)) {
+                *pDone = TRUE;
             }
         }
 
@@ -632,7 +655,7 @@ A_STATUS DevDsrHandler(void *context)
     }
 
     AR_DEBUG_PRINTF(ATH_DEBUG_IRQ,("-DevDsrHandler \n"));
-    return A_OK;
+    return status;
 }
 
 

@@ -1,22 +1,21 @@
-/*
- *
- * Copyright (c) 2007 Atheros Communications Inc.
- * All rights reserved.
- *
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  published by the Free Software Foundation;
- *
- *  Software distributed under the License is distributed on an "AS
- *  IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
- *  implied. See the License for the specific language governing
- *  rights and limitations under the License.
- *
- *
- *
- */
-
+//------------------------------------------------------------------------------
+// <copyright file="htc_api.h" company="Atheros">
+//    Copyright (c) 2007-2008 Atheros Corporation.  All rights reserved.
+// 
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License version 2 as
+// published by the Free Software Foundation;
+//
+// Software distributed under the License is distributed on an "AS
+// IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// rights and limitations under the License.
+//
+//
+//------------------------------------------------------------------------------
+//==============================================================================
+// Author(s): ="Atheros"
+//==============================================================================
 #ifndef _HTC_API_H_
 #define _HTC_API_H_
 
@@ -33,23 +32,6 @@ extern "C" {
 // TODO -remove me, but we have to fix BMI first
 #define HTC_MAILBOX_NUM_MAX    4
 
-
-/* ------ Endpoint IDS ------ */
-typedef enum
-{
-    ENDPOINT_UNUSED = -1,
-    ENDPOINT_0 = 0,
-    ENDPOINT_1 = 1,
-    ENDPOINT_2 = 2,
-    ENDPOINT_3,
-    ENDPOINT_4,
-    ENDPOINT_5,
-    ENDPOINT_6,
-    ENDPOINT_7,
-    ENDPOINT_8,
-    ENDPOINT_MAX,
-} HTC_ENDPOINT_ID;
-
 /* this is the amount of header room required by users of HTC */
 #define HTC_HEADER_LEN         HTC_HDR_LENGTH
 
@@ -58,8 +40,7 @@ typedef void *HTC_HANDLE;
 typedef A_UINT16 HTC_SERVICE_ID;
 
 typedef struct _HTC_INIT_INFO {
-    void   (*AddInstance)(HTC_HANDLE);
-    void   (*DeleteInstance)(void *Instance);
+    void   *pContext;           /* context for target failure notification */
     void   (*TargetFailure)(void *Instance, A_STATUS Status);
 } HTC_INIT_INFO;
 
@@ -78,16 +59,41 @@ typedef void   (*HTC_EP_RECV_PKT)(void *,HTC_PACKET *);
  * unnecessary */
 typedef void   (*HTC_EP_RECV_REFILL)(void *, HTC_ENDPOINT_ID Endpoint);
 
+/* Optional per service connection receive buffer allocation callback.
+ * On some systems packet buffers are an extremely limited resource.  Rather than
+ * queue largest-possible-sized buffers to HTC, some systems would rather
+ * allocate a specific size as the packet is received.  The trade off is
+ * slightly more processing (callback invoked for each RX packet)
+ * for the benefit of committing fewer buffer resources into HTC.
+ *
+ * The callback is provided the length of the pending packet to fetch. This includes the
+ * HTC header length plus the length of payload.  The callback can return a pointer to
+ * the allocated HTC packet for immediate use.
+ *
+ * NOTE*** This callback is mutually exclusive with the the refill callback above.
+ *
+ * */
+typedef HTC_PACKET *(*HTC_EP_RECV_ALLOC)(void *, HTC_ENDPOINT_ID Endpoint, int Length);
+
+typedef enum _HTC_SEND_FULL_ACTION {
+    HTC_SEND_FULL_KEEP = 0,  /* packet that overflowed should be kept in the queue */
+    HTC_SEND_FULL_DROP = 1,  /* packet that overflowed should be dropped */
+} HTC_SEND_FULL_ACTION;
+
 /* Optional per service connection callback when a send queue is full. This can occur if the
  * host continues queueing up TX packets faster than credits can arrive
  * To prevent the host (on some Oses like Linux) from continuously queueing packets
  * and consuming resources, this callback is provided so that that the host
- * can disable TX in the subsystem (i.e. network stack)
- * Other OSes require a "per-packet" indication_RAW_STREAM_NUM_MAX for each completed TX packet, this
- * closed loop mechanism will prevent the network stack from overunning the NIC */
-typedef void (*HTC_EP_SEND_QUEUE_FULL)(void *, HTC_ENDPOINT_ID Endpoint);
-/* Optional per service connection callback when a send queue is available for receive new packet. */
-typedef void (*HTC_EP_SEND_QUEUE_AVAIL)(void *, HTC_ENDPOINT_ID Endpoint);
+ * can disable TX in the subsystem (i.e. network stack).
+ * This callback is invoked for each packet that "overflows" the HTC queue. The callback can
+ * determine whether the new packet that overflowed the queue can be kept (HTC_SEND_FULL_KEEP) or
+ * dropped (HTC_SEND_FULL_DROP).  If a packet is dropped, the EpTxComplete handler will be called
+ * and the packet's status field will be set to A_NO_RESOURCE.
+ * Other OSes require a "per-packet" indication for each completed TX packet, this
+ * closed loop mechanism will prevent the network stack from overunning the NIC
+ * The packet to keep or drop is passed for inspection to the registered handler the handler
+ * must ONLY inspect the packet, it may not free or reclaim the packet. */
+typedef HTC_SEND_FULL_ACTION (*HTC_EP_SEND_QUEUE_FULL)(void *, HTC_PACKET *pPacket);
 
 typedef struct _HTC_EP_CALLBACKS {
     void                     *pContext;     /* context for each callback */
@@ -95,7 +101,7 @@ typedef struct _HTC_EP_CALLBACKS {
     HTC_EP_RECV_PKT          EpRecv;        /* receive callback for connected endpoint */
     HTC_EP_RECV_REFILL       EpRecvRefill;  /* OPTIONAL receive re-fill callback for connected endpoint */
     HTC_EP_SEND_QUEUE_FULL   EpSendFull;    /* OPTIONAL send full callback */
-    HTC_EP_SEND_QUEUE_AVAIL  EpSendAvail;    /* OPTIONAL send available callback */
+    HTC_EP_RECV_ALLOC        EpRecvAlloc;   /* OPTIONAL recv allocation callback */
 } HTC_EP_CALLBACKS;
 
 /* service connection information */
@@ -145,10 +151,15 @@ typedef struct _HTC_ENDPOINT_CREDIT_DIST {
                                                and endpoint needs credits in order to transmit */
     int                 TxCreditSize;       /* size in bytes of each credit (set by HTC) */
     int                 TxCreditsPerMaxMsg; /* credits required for a maximum sized messages (set by HTC) */
-    void                *pHTCReserved;      /* reserved for HTC use */
+    void                *pHTCReserved;      /* reserved for HTC use */    
+    int                 TxQueueDepth;       /* current depth of TX queue , i.e. messages waiting for credits
+                                               This field is valid only when HTC_CREDIT_DIST_ACTIVITY_CHANGE
+                                               or HTC_CREDIT_DIST_SEND_COMPLETE is indicated on an endpoint
+                                               that has non-zero credits to recover
+                                              */
 } HTC_ENDPOINT_CREDIT_DIST;
 
-#define HTC_EP_ACTIVE                            (1 << 31)
+#define HTC_EP_ACTIVE                       ((A_UINT32) (((A_UINT32) 1) << 31))
 
 /* macro to check if an endpoint has gone active, useful for credit
  * distributions */
@@ -186,10 +197,11 @@ typedef struct _HTC_ENDPOINT_STATS {
     A_UINT32  TxCreditLowIndications;  /* number of times the host set the credit-low flag in a send message on
                                         this endpoint */
     A_UINT32  TxIssued;               /* running count of TX packets issued */
+    A_UINT32  TxDropped;              /* tx packets that were dropped */
     A_UINT32  TxCreditRpts;           /* running count of total credit reports received for this endpoint */
-    A_UINT32  TxCreditRptsFromRx;
-    A_UINT32  TxCreditRptsFromOther;
-    A_UINT32  TxCreditRptsFromEp0;
+    A_UINT32  TxCreditRptsFromRx;     /* credit reports received from this endpoint's RX packets */
+    A_UINT32  TxCreditRptsFromOther;  /* credit reports received from RX packets of other endpoints */
+    A_UINT32  TxCreditRptsFromEp0;    /* credit reports received from endpoint 0 RX packets */
     A_UINT32  TxCreditsFromRx;        /* count of credits received via Rx packets on this endpoint */
     A_UINT32  TxCreditsFromOther;     /* count of credits received via another endpoint */
     A_UINT32  TxCreditsFromEp0;       /* count of credits received via another endpoint */
@@ -202,18 +214,17 @@ typedef struct _HTC_ENDPOINT_STATS {
 
 /* ------ Function Prototypes ------ */
 /*+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-  @desc: Initialize HTC
-  @function name: HTCInit
-  @input:  pInfo - initialization information
+  @desc: Create an instance of HTC over the underlying HIF device
+  @function name: HTCCreate
+  @input:  HifDevice - hif device handle,
+           pInfo - initialization information
   @output:
-  @return: A_OK on success
-  @notes: The caller initializes global HTC state and registers various instance
-          notification callbacks (see HTC_INIT_INFO).
-
+  @return: HTC_HANDLE on success, NULL on failure
+  @notes: 
   @example:
-  @see also: HTCShutdown
+  @see also: HTCDestroy
 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++*/
-A_STATUS    HTCInit(HTC_INIT_INFO *pInfo);
+HTC_HANDLE HTCCreate(void *HifDevice, HTC_INIT_INFO *pInfo);
 /*+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
   @desc: Get the underlying HIF device handle
   @function name: HTCGetHifDevice
@@ -225,20 +236,6 @@ A_STATUS    HTCInit(HTC_INIT_INFO *pInfo);
   @see also:
 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++*/
 void       *HTCGetHifDevice(HTC_HANDLE HTCHandle);
-/*+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-  @desc: Set the associated instance for the HTC handle
-  @function name: HTCSetInstance
-  @input:  HTCHandle - handle passed into the AddInstance callback
-           Instance - caller supplied instance object
-  @output:
-  @return:
-  @notes:  Caller must set the instance information for the HTC handle in order to receive
-           notifications for instance deletion (DeleteInstance callback is called) and for target
-           failure notification.
-  @example:
-  @see also:
-+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++*/
-void        HTCSetInstance(HTC_HANDLE HTCHandle, void *Instance);
 /*+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
   @desc: Set credit distribution parameters
   @function name: HTCSetCreditDistribution
@@ -349,16 +346,16 @@ A_STATUS    HTCSendPkt(HTC_HANDLE HTCHandle, HTC_PACKET *pPacket);
 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++*/
 void        HTCStop(HTC_HANDLE HTCHandle);
 /*+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-  @desc: Shutdown HTC
-  @function name: HTCShutdown
-  @input:
+  @desc: Destory HTC service
+  @function name: HTCDestroy
+  @input: HTCHandle 
   @output:
   @return:
-  @notes:  This cleans up all resources allocated by HTCInit().
+  @notes:  This cleans up all resources allocated by HTCCreate().
   @example:
-  @see also: HTCInit
+  @see also: HTCCreate
 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++*/
-void        HTCShutDown(void);
+void        HTCDestroy(HTC_HANDLE HTCHandle);
 /*+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
   @desc: Flush pending TX packets
   @function name: HTCFlushEndpoint
@@ -431,6 +428,29 @@ A_BOOL       HTCGetEndpointStatistics(HTC_HANDLE               HTCHandle,
                                       HTC_ENDPOINT_ID          Endpoint,
                                       HTC_ENDPOINT_STAT_ACTION Action,
                                       HTC_ENDPOINT_STATS       *pStats);
+
+/*+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+  @desc: Unblock HTC message reception
+  @function name: HTCUnblockRecv
+  @input:  HTCHandle - HTC handle
+  @output:
+  @return:
+  @notes:
+           HTC will block the receiver if the EpRecvAlloc callback fails to provide a packet.
+           The caller can use this API to indicate to HTC when resources (buffers) are available
+           such that the  receiver can be unblocked and HTC may re-attempt fetching the pending message.
+
+           This API is not required if the user uses the EpRecvRefill callback or uses the HTCAddReceivePacket()
+           API to recycle or provide receive packets to HTC.
+
+  @example:
+  @see also:
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++*/
+void HTCUnblockRecv(HTC_HANDLE HTCHandle);
+
+/* internally used functions for testing... */
+void HTCEnableRecv(HTC_HANDLE HTCHandle);
+void HTCDisableRecv(HTC_HANDLE HTCHandle);
 
 #ifdef __cplusplus
 }

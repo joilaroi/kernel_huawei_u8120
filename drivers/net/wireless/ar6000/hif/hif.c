@@ -1,94 +1,73 @@
-/*
- * @file: hif.c
- *
- * @abstract: HIF layer reference implementation for Atheros SDIO stack
- *
- * @notice: Copyright (c) 2004-2006 Atheros Communications Inc.
- *
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  published by the Free Software Foundation;
- *
- *  Software distributed under the License is distributed on an "AS
- *  IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
- *  implied. See the License for the specific language governing
- *  rights and limitations under the License.
- *
- *
- *
- */
-
+//------------------------------------------------------------------------------
+// <copyright file="hif.c" company="Atheros">
+//    Copyright (c) 2004-2008 Atheros Corporation.  All rights reserved.
+// 
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License version 2 as
+// published by the Free Software Foundation;
+//
+// Software distributed under the License is distributed on an "AS
+// IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// rights and limitations under the License.
+//
+//
+//------------------------------------------------------------------------------
+//==============================================================================
+// HIF layer reference implementation for Linux Native MMC stack
+//
+// Author(s): ="Atheros"
+//==============================================================================
+#include <linux/mmc/card.h>
+#include <linux/mmc/sdio_func.h>
+#include <linux/mmc/sdio_ids.h>
+#include <linux/kthread.h>
+/* by default setup a bounce buffer for the data packets, if the underlying host controller driver
+   does not use DMA you may be able to skip this step and save the memory allocation and transfer time */
+#define HIF_USE_DMA_BOUNCE_BUFFER 1
 #include "hif_internal.h"
 
+/* ATHENV */
+#include <linux/wakelock.h>
+extern struct wake_lock ar6k_init_wake_lock;
+/*BU5D02101,WIFI Module,hanshirong 66539,20100208 begin++ */
+extern struct wake_lock timeout_wake_lock;
+extern int ar6000_suspend_flag;
+/*BU5D02101,WIFI Module,hanshirong 66539,20100208 end-- */
+/* ATHENV */
+
+static int hifDeviceInserted(struct sdio_func *func, const struct sdio_device_id *id);
+static void hifDeviceRemoved(struct sdio_func *func);
+static HIF_DEVICE *addHifDevice(struct sdio_func *func);
+static HIF_DEVICE *getHifDevice(struct sdio_func *func);
+static void delHifDevice(HIF_DEVICE * device);
+
+
+
 /* ------ Static Variables ------ */
-
-/* ------ Global Variable Declarations ------- */
-SD_PNP_INFO Ids[] = {
-    {
-        .SDIO_ManufacturerID = MANUFACTURER_ID_AR6001_BASE | 0xB,
-        .SDIO_ManufacturerCode = MANUFACTURER_CODE,
-        .SDIO_FunctionClass = FUNCTION_CLASS,
-        .SDIO_FunctionNo = 1
-    },
-    {
-        .SDIO_ManufacturerID = MANUFACTURER_ID_AR6001_BASE | 0xA,
-        .SDIO_ManufacturerCode = MANUFACTURER_CODE,
-        .SDIO_FunctionClass = FUNCTION_CLASS,
-        .SDIO_FunctionNo = 1
-    },
-    {
-        .SDIO_ManufacturerID = MANUFACTURER_ID_AR6001_BASE | 0x9,
-        .SDIO_ManufacturerCode = MANUFACTURER_CODE,
-        .SDIO_FunctionClass = FUNCTION_CLASS,
-        .SDIO_FunctionNo = 1
-    },
-    {
-        .SDIO_ManufacturerID = MANUFACTURER_ID_AR6001_BASE | 0x8,
-        .SDIO_ManufacturerCode = MANUFACTURER_CODE,
-        .SDIO_FunctionClass = FUNCTION_CLASS,
-        .SDIO_FunctionNo = 1
-    },
-    {
-        .SDIO_ManufacturerID = MANUFACTURER_ID_AR6002_BASE | 0x0,
-        .SDIO_ManufacturerCode = MANUFACTURER_CODE,
-        .SDIO_FunctionClass = FUNCTION_CLASS,
-        .SDIO_FunctionNo = 1
-    },
-    {
-        .SDIO_ManufacturerID = MANUFACTURER_ID_AR6002_BASE | 0x1,
-        .SDIO_ManufacturerCode = MANUFACTURER_CODE,
-        .SDIO_FunctionClass = FUNCTION_CLASS,
-        .SDIO_FunctionNo = 1
-    },
-    {
-    }                      //list is null termintaed
+static const struct sdio_device_id ar6k_id_table[] = {
+    {  SDIO_DEVICE(MANUFACTURER_CODE, (MANUFACTURER_ID_AR6002_BASE | 0x0))  },
+    {  SDIO_DEVICE(MANUFACTURER_CODE, (MANUFACTURER_ID_AR6002_BASE | 0x1))  },
+    {  SDIO_DEVICE(MANUFACTURER_CODE, (MANUFACTURER_ID_AR6003_BASE | 0x0))  },
+    { /* null */                                         },
 };
+MODULE_DEVICE_TABLE(sdio, ar6k_id_table);
 
-TARGET_FUNCTION_CONTEXT FunctionContext = {
-    .function.Version    = CT_SDIO_STACK_VERSION_CODE,
-    .function.pName      = "sdio_wlan",
-    .function.MaxDevices = 1,
-    .function.NumDevices = 0,
-    .function.pIds       = Ids,
-    .function.pProbe     = hifDeviceInserted,
-    .function.pRemove    = hifDeviceRemoved,
-    .function.pSuspend   = NULL,
-    .function.pResume    = NULL,
-    .function.pWake      = NULL,
-    .function.pContext   = &FunctionContext,
+static struct sdio_driver ar6k_driver = {
+	.name = "ar6k_wlan",
+	.id_table = ar6k_id_table,
+	.probe = hifDeviceInserted,
+	.remove = hifDeviceRemoved,
 };
+/* make sure we only unregister when registered. */
+static int registered = 0;
 
-HIF_DEVICE hifDevice[HIF_MAX_DEVICES];
-HTC_CALLBACKS htcCallbacks;
-BUS_REQUEST busRequest[BUS_REQUEST_MAX_NUM];
-static BUS_REQUEST *s_busRequestFreeQueue = NULL;
-OS_CRITICALSECTION lock;
+OSDRV_CALLBACKS osdrvCallbacks;
 extern A_UINT32 onebitmode;
 extern A_UINT32 busspeedlow;
+extern A_UINT32 debughif;
 
 #ifdef DEBUG
-extern A_UINT32 debughif;
 #define ATH_DEBUG_ERROR 1
 #define ATH_DEBUG_WARN  2
 #define ATH_DEBUG_TRACE 3
@@ -97,121 +76,84 @@ extern A_UINT32 debughif;
     {if (lvl <= debughif)\
         A_PRINTF(KERN_ALERT _AR_DEBUG_PRINTX_ARG args);\
     }
+#define AR_DEBUG_ASSERT(test) do {               \
+    if (!(test)) {                               \
+        AR_DEBUG_PRINTF(ATH_DEBUG_ERROR, ("Debug Assert Caught, File %s, Line: %d, Test:%s \n",__FILE__, __LINE__,#test));         \
+    }                                            \
+} while(0)
 #else
 #define AR_DEBUG_PRINTF(lvl, args)
+#define AR_DEBUG_ASSERT(test)
 #endif
 
-static BUS_REQUEST *hifAllocateBusRequest(void);
-static void hifFreeBusRequest(BUS_REQUEST *busrequest);
-static THREAD_RETURN insert_helper_func(POSKERNEL_HELPER pHelper);
+static BUS_REQUEST *hifAllocateBusRequest(HIF_DEVICE *device);
+static void hifFreeBusRequest(HIF_DEVICE *device, BUS_REQUEST *busrequest);
 static void ResetAllCards(void);
 
 /* ------ Functions ------ */
-int HIFInit(HTC_CALLBACKS *callbacks)
+A_STATUS HIFInit(OSDRV_CALLBACKS *callbacks)
 {
-    SDIO_STATUS status;
-    DBG_ASSERT(callbacks != NULL);
+    int status;
+    AR_DEBUG_ASSERT(callbacks != NULL);
 
-    /* Store the callback and event handlers */
-    htcCallbacks.deviceInsertedHandler = callbacks->deviceInsertedHandler;
-    htcCallbacks.deviceRemovedHandler = callbacks->deviceRemovedHandler;
-    htcCallbacks.deviceSuspendHandler = callbacks->deviceSuspendHandler;
-    htcCallbacks.deviceResumeHandler = callbacks->deviceResumeHandler;
-    htcCallbacks.deviceWakeupHandler = callbacks->deviceWakeupHandler;
-    htcCallbacks.rwCompletionHandler = callbacks->rwCompletionHandler;
-    htcCallbacks.dsrHandler = callbacks->dsrHandler;
-
-    CriticalSectionInit(&lock);
+    /* store the callback handlers */
+    osdrvCallbacks = *callbacks;
 
     /* Register with bus driver core */
-    status = SDIO_RegisterFunction(&FunctionContext.function);
-    DBG_ASSERT(SDIO_SUCCESS(status));
+    AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: HIFInit registering\n"));
+    registered = 1;
+    status = sdio_register_driver(&ar6k_driver);
+    AR_DEBUG_ASSERT(status==0);
 
-    return(0);
+    if (status != 0) {
+        return A_ERROR;
+    }
+
+    return A_OK;
+
 }
 
-A_STATUS
-HIFReadWrite(HIF_DEVICE *device,
+static A_STATUS
+__HIFReadWrite(HIF_DEVICE *device,
              A_UINT32 address,
              A_UCHAR *buffer,
              A_UINT32 length,
              A_UINT32 request,
              void *context)
 {
-    A_UINT8 rw;
-    A_UINT8 mode;
-    A_UINT8 funcNo;
     A_UINT8 opcode;
-    A_UINT16 count;
-    SDREQUEST *sdrequest;
-    SDIO_STATUS sdiostatus;
-    BUS_REQUEST *busrequest;
     A_STATUS    status = A_OK;
+    int     ret;
+    A_UINT8 *tbuffer;
 
-    DBG_ASSERT(device != NULL);
-    DBG_ASSERT(device->handle != NULL);
+    AR_DEBUG_ASSERT(device != NULL);
+    AR_DEBUG_ASSERT(device->func != NULL);
 
-    AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("Device: %p\n", device));
+    AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: Device: 0x%p, buffer:0x%p\n", device, buffer));
 
     do {
-        busrequest = hifAllocateBusRequest();
-        if (busrequest == NULL) {
-            AR_DEBUG_PRINTF(ATH_DEBUG_ERROR, ("HIF Unable to allocate bus request\n"));
-            status = A_NO_RESOURCE;
-            break;
-        }
-
-        sdrequest = busrequest->request;
-        busrequest->context = context;
-
-        sdrequest->pDataBuffer = buffer;
-        if (request & HIF_SYNCHRONOUS) {
-            sdrequest->Flags = SDREQ_FLAGS_RESP_SDIO_R5 | SDREQ_FLAGS_DATA_TRANS;
-            sdrequest->pCompleteContext = NULL;
-            sdrequest->pCompletion = NULL;
-            AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("Execution mode: Synchronous\n"));
-        } else if (request & HIF_ASYNCHRONOUS) {
-            sdrequest->Flags = SDREQ_FLAGS_RESP_SDIO_R5 | SDREQ_FLAGS_DATA_TRANS |
-                               SDREQ_FLAGS_TRANS_ASYNC;
-            sdrequest->pCompleteContext = busrequest;
-            sdrequest->pCompletion = hifRWCompletionHandler;
-            AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("Execution mode: Asynchronous\n"));
-        } else {
-            AR_DEBUG_PRINTF(ATH_DEBUG_ERROR,
-                            ("Invalid execution mode: 0x%08x\n", request));
-            status = A_EINVAL;
-            break;
-        }
-
         if (request & HIF_EXTENDED_IO) {
-            AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("Command type: CMD53\n"));
-            sdrequest->Command = CMD53;
+            //AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: Command type: CMD53\n"));
         } else {
             AR_DEBUG_PRINTF(ATH_DEBUG_ERROR,
-                            ("Invalid command type: 0x%08x\n", request));
+                            ("AR6000: Invalid command type: 0x%08x\n", request));
             status = A_EINVAL;
             break;
         }
 
         if (request & HIF_BLOCK_BASIS) {
-            mode = CMD53_BLOCK_BASIS;
-            sdrequest->BlockLen = HIF_MBOX_BLOCK_SIZE;
-            sdrequest->BlockCount = length / HIF_MBOX_BLOCK_SIZE;
-            count = sdrequest->BlockCount;
+            /* round to whole block length size */
+            length = (length / HIF_MBOX_BLOCK_SIZE) * HIF_MBOX_BLOCK_SIZE;
             AR_DEBUG_PRINTF(ATH_DEBUG_TRACE,
-                            ("Block mode (BlockLen: %d, BlockCount: %d)\n",
-                            sdrequest->BlockLen, sdrequest->BlockCount));
+                            ("AR6000: Block mode (BlockLen: %d)\n",
+                            length));
         } else if (request & HIF_BYTE_BASIS) {
-            mode = CMD53_BYTE_BASIS;
-            sdrequest->BlockLen = length;
-            sdrequest->BlockCount = 1;
-            count = sdrequest->BlockLen;
             AR_DEBUG_PRINTF(ATH_DEBUG_TRACE,
-                            ("Byte mode (BlockLen: %d, BlockCount: %d)\n",
-                            sdrequest->BlockLen, sdrequest->BlockCount));
+                            ("AR6000: Byte mode (BlockLen: %d)\n",
+                            length));
         } else {
             AR_DEBUG_PRINTF(ATH_DEBUG_ERROR,
-                            ("Invalid data mode: 0x%08x\n", request));
+                            ("AR6000: Invalid data mode: 0x%08x\n", request));
             status = A_EINVAL;
             break;
         }
@@ -219,7 +161,7 @@ HIFReadWrite(HIF_DEVICE *device,
 #if 0
         /* useful for checking register accesses */
         if (length & 0x3) {
-            A_PRINTF(KERN_ALERT"HIF (%s) is not a multiple of 4 bytes, addr:0x%X, len:%d\n",
+            A_PRINTF(KERN_ALERT"AR6000: HIF (%s) is not a multiple of 4 bytes, addr:0x%X, len:%d\n",
                                 request & HIF_WRITE ? "write":"read", address, length);
         }
 #endif
@@ -228,7 +170,7 @@ HIFReadWrite(HIF_DEVICE *device,
             (address <= HIF_MBOX_END_ADDR(3)))
         {
 
-            DBG_ASSERT(length <= HIF_MBOX_WIDTH);
+            AR_DEBUG_ASSERT(length <= HIF_MBOX_WIDTH);
 
             /*
              * Mailbox write. Adjust the address so that the last byte
@@ -237,62 +179,211 @@ HIFReadWrite(HIF_DEVICE *device,
             address += (HIF_MBOX_WIDTH - length);
         }
 
-
-
-        if (request & HIF_WRITE) {
-            rw = CMD53_WRITE;
-            sdrequest->Flags |= SDREQ_FLAGS_DATA_WRITE;
-            AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("Direction: Write\n"));
-        } else if (request & HIF_READ) {
-            rw = CMD53_READ;
-            AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("Direction: Read\n"));
-        } else {
-            AR_DEBUG_PRINTF(ATH_DEBUG_ERROR,
-                            ("Invalid direction: 0x%08x\n", request));
-            status = A_EINVAL;
-            break;
-        }
-
         if (request & HIF_FIXED_ADDRESS) {
             opcode = CMD53_FIXED_ADDRESS;
-            AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("Address mode: Fixed\n"));
+            AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: Address mode: Fixed 0x%X\n", address));
         } else if (request & HIF_INCREMENTAL_ADDRESS) {
             opcode = CMD53_INCR_ADDRESS;
-            AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("Address mode: Incremental\n"));
+            AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: Address mode: Incremental 0x%X\n", address));
         } else {
             AR_DEBUG_PRINTF(ATH_DEBUG_ERROR,
-                            ("Invalid address mode: 0x%08x\n", request));
+                            ("AR6000: Invalid address mode: 0x%08x\n", request));
             status = A_EINVAL;
             break;
         }
 
-        funcNo = SDDEVICE_GET_SDIO_FUNCNO(device->handle);
-        AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("Function number: %d\n", funcNo));
-        SDIO_SET_CMD53_ARG(sdrequest->Argument, rw, funcNo,
-                           mode, opcode, address, count);
+        if (request & HIF_WRITE) {
+#if HIF_USE_DMA_BOUNCE_BUFFER
+	  AR_DEBUG_ASSERT(device->dma_buffer != NULL);
+	  tbuffer = device->dma_buffer;
+	  /* copy the write data to the dma buffer */
+	  AR_DEBUG_ASSERT(length <= HIF_DMA_BUFFER_SIZE);
+	  memcpy(tbuffer, buffer, length);
+#else
+	  tbuffer = buffer;
+#endif
+            if (opcode == CMD53_FIXED_ADDRESS) {
+                ret = sdio_writesb(device->func, address, tbuffer, length);
+                AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: writesb ret=%d address: 0x%X, len: %d, 0x%X\n",
+						  ret, address, length, *(int *)tbuffer));
+            } else {
+                ret = sdio_memcpy_toio(device->func, address, tbuffer, length);
+                AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: writeio ret=%d address: 0x%X, len: %d, 0x%X\n",
+						  ret, address, length, *(int *)tbuffer));
+            }
+        } else if (request & HIF_READ) {
+#if HIF_USE_DMA_BOUNCE_BUFFER
+	  AR_DEBUG_ASSERT(device->dma_buffer != NULL);
+	  AR_DEBUG_ASSERT(length <= HIF_DMA_BUFFER_SIZE);
+	  tbuffer = device->dma_buffer;
+#else
+	  tbuffer = buffer;
+#endif
+            if (opcode == CMD53_FIXED_ADDRESS) {
+                ret = sdio_readsb(device->func, tbuffer, address, length);
+                AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: readsb ret=%d address: 0x%X, len: %d, 0x%X\n",
+						  ret, address, length, *(int *)tbuffer));
+            } else {
+                ret = sdio_memcpy_fromio(device->func, tbuffer, address, length);
+                AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: readio ret=%d address: 0x%X, len: %d, 0x%X\n",
+						  ret, address, length, *(int *)tbuffer));
+            }
+#if HIF_USE_DMA_BOUNCE_BUFFER
+	  /* copy the read data from the dma buffer */
+	  memcpy(buffer, tbuffer, length);
+#endif
+        } else {
+            AR_DEBUG_PRINTF(ATH_DEBUG_ERROR,
+                            ("AR6000: Invalid direction: 0x%08x\n", request));
+            status = A_EINVAL;
+            break;
+        }
 
-        /* Send the command out */
-        sdiostatus = SDDEVICE_CALL_REQUEST_FUNC(device->handle, sdrequest);
-
-        if (!SDIO_SUCCESS(sdiostatus)) {
+        if (ret) {
             status = A_ERROR;
         }
-
     } while (FALSE);
-
-    if (A_FAILED(status) || (request & HIF_SYNCHRONOUS)) {
-        if (busrequest != NULL) {
-            hifFreeBusRequest(busrequest);
-        }
-    }
-
-    if (A_FAILED(status) && (request & HIF_ASYNCHRONOUS)) {
-            /* call back async handler on failure */
-        htcCallbacks.rwCompletionHandler(context, status);
-    }
 
     return status;
 }
+
+/* queue a read/write request */
+A_STATUS
+HIFReadWrite(HIF_DEVICE *device,
+             A_UINT32 address,
+             A_UCHAR *buffer,
+             A_UINT32 length,
+             A_UINT32 request,
+             void *context)
+{
+    A_STATUS    status = A_OK;
+    unsigned long flags;
+    BUS_REQUEST *busrequest;
+    BUS_REQUEST *async;
+    BUS_REQUEST *active;
+
+    AR_DEBUG_ASSERT(device != NULL);
+    AR_DEBUG_ASSERT(device->func != NULL);
+
+    AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: Device: %p\n", device));
+
+    do {
+        if ((request & HIF_ASYNCHRONOUS) || (request & HIF_SYNCHRONOUS)){
+            /* serialize all requests through the async thread */
+            AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: Execution mode: %s\n", (request & HIF_ASYNCHRONOUS)?"Async":"Synch"));
+            busrequest = hifAllocateBusRequest(device);
+            if (busrequest == NULL) {
+               AR_DEBUG_PRINTF(ATH_DEBUG_ERROR, ("AR6000: no async bus requests available\n"));
+                return A_ERROR;
+            }
+            spin_lock_irqsave(&device->asynclock, flags);
+            busrequest->address = address;
+            busrequest->buffer = buffer;
+            busrequest->length = length;
+            busrequest->request = request;
+            busrequest->context = context;
+            /* add to async list */
+            active = device->asyncreq;
+            if (active == NULL) {
+                device->asyncreq = busrequest;
+                device->asyncreq->inusenext = NULL;
+            } else {
+                for (async = device->asyncreq;
+                     async != NULL;
+                     async = async->inusenext) {
+                     active =  async;
+                }
+                active->inusenext = busrequest;
+                busrequest->inusenext = NULL;
+            }
+            spin_unlock_irqrestore(&device->asynclock, flags);
+            if (request & HIF_SYNCHRONOUS) {
+                AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: queued sync req: 0x%X\n", (unsigned int)busrequest));
+
+                /* wait for completion */
+                up(&device->sem_async);
+                if (down_interruptible(&busrequest->sem_req) != 0) {
+                    /* interrupted, exit */
+                    return A_ERROR;
+                } else {
+                    AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: sync return freeing 0x%X: 0x%X\n",
+						      (unsigned int)busrequest, busrequest->status));
+                    AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: freeing req: 0x%X\n", (unsigned int)request));
+                    hifFreeBusRequest(device, busrequest);
+                    return busrequest->status;
+                }
+            } else {
+                AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: queued async req: 0x%X\n", (unsigned int)busrequest));
+                up(&device->sem_async);
+                return A_PENDING;
+            }
+        } else {
+            AR_DEBUG_PRINTF(ATH_DEBUG_ERROR,
+                            ("AR6000: Invalid execution mode: 0x%08x\n", (unsigned int)request));
+            status = A_EINVAL;
+            break;
+        }
+    } while(0);
+
+    return status;
+}
+/* thread to serialize all requests, both sync and async */
+static int async_task(void *param)
+ {
+    HIF_DEVICE *device;
+    BUS_REQUEST *request;
+    A_STATUS status;
+    unsigned long flags;
+
+    device = (HIF_DEVICE *)param;
+    AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: async task\n"));
+    set_current_state(TASK_INTERRUPTIBLE);
+    while(!device->async_shutdown) {
+        /* wait for work */
+        if (down_interruptible(&device->sem_async) != 0) {
+            /* interrupted, exit */
+            AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: async task interrupted\n"));
+            break;
+        }
+        if (device->async_shutdown) {
+            AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: async task stopping\n"));
+            break;
+        }
+        /* we want to hold the host over multiple cmds if possible, but holding the host blocks card interrupts */
+        sdio_claim_host(device->func);
+        spin_lock_irqsave(&device->asynclock, flags);
+        /* pull the request to work on */
+        while (device->asyncreq != NULL) {
+            request = device->asyncreq;
+            if (request->inusenext != NULL) {
+                device->asyncreq = request->inusenext;
+            } else {
+                device->asyncreq = NULL;
+            }
+            spin_unlock_irqrestore(&device->asynclock, flags);
+            /* call HIFReadWrite in sync mode to do the work */
+            AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: async_task processing req: 0x%X\n", (unsigned int)request));
+            status = __HIFReadWrite(device, request->address, request->buffer,
+                                  request->length, request->request & ~HIF_SYNCHRONOUS, NULL);
+            if (request->request & HIF_ASYNCHRONOUS) {
+                AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: async_task completion routine req: 0x%X\n", (unsigned int)request));
+                device->htcCallbacks.rwCompletionHandler(request->context, status);
+                AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: async_task freeing req: 0x%X\n", (unsigned int)request));
+                hifFreeBusRequest(device, request);
+            } else {
+                AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: async_task upping req: 0x%X\n", (unsigned int)request));
+                request->status = status;
+                up(&request->sem_req);
+            }
+            spin_lock_irqsave(&device->asynclock, flags);
+        }
+        spin_unlock_irqrestore(&device->asynclock, flags);
+        sdio_release_host(device->func);
+    }
+
+    complete_and_exit(&device->async_completion, 0);
+    return 0;
+ }
 
 A_STATUS
 HIFConfigureDevice(HIF_DEVICE *device, HIF_DEVICE_CONFIG_OPCODE opcode,
@@ -314,12 +405,11 @@ HIFConfigureDevice(HIF_DEVICE *device, HIF_DEVICE_CONFIG_OPCODE opcode,
             }
             break;
         case HIF_DEVICE_GET_IRQ_PROC_MODE:
-                /* the SDIO stack allows the interrupts to be processed either way, ASYNC or SYNC */
-            *((HIF_DEVICE_IRQ_PROCESSING_MODE *)config) = HIF_DEVICE_IRQ_ASYNC_SYNC;
+            *((HIF_DEVICE_IRQ_PROCESSING_MODE *)config) = HIF_DEVICE_IRQ_SYNC_ONLY;
             break;
         default:
             AR_DEBUG_PRINTF(ATH_DEBUG_WARN,
-                            ("Unsupported configuration opcode: %d\n", opcode));
+                            ("AR6000: Unsupported configuration opcode: %d\n", opcode));
             return A_ERROR;
     }
 
@@ -329,496 +419,339 @@ HIFConfigureDevice(HIF_DEVICE *device, HIF_DEVICE_CONFIG_OPCODE opcode,
 void
 HIFShutDownDevice(HIF_DEVICE *device)
 {
-    A_UINT8 data;
-    A_UINT32 count;
-    SDIO_STATUS status;
-    SDCONFIG_BUS_MODE_DATA busSettings;
-    SDCONFIG_FUNC_ENABLE_DISABLE_DATA fData;
-
+    AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: +HIFShutDownDevice\n"));
     if (device != NULL) {
-        DBG_ASSERT(device->handle != NULL);
-
-        /* Remove the allocated current if any */
-        status = SDLIB_IssueConfig(device->handle,
-                                   SDCONFIG_FUNC_FREE_SLOT_CURRENT, NULL, 0);
-        DBG_ASSERT(SDIO_SUCCESS(status));
-
-        /* Disable the card */
-        fData.EnableFlags = SDCONFIG_DISABLE_FUNC;
-        fData.TimeOut = 1;
-        status = SDLIB_IssueConfig(device->handle, SDCONFIG_FUNC_ENABLE_DISABLE,
-                                   &fData, sizeof(fData));
-        DBG_ASSERT(SDIO_SUCCESS(status));
-
-        /* Perform a soft I/O reset */
-        data = SDIO_IO_RESET;
-        status = SDLIB_IssueCMD52(device->handle, 0, SDIO_IO_ABORT_REG,
-                                  &data, 1, 1);
-        DBG_ASSERT(SDIO_SUCCESS(status));
-
-        /*
-         * WAR - Codetelligence driver does not seem to shutdown correctly in 1
-         * bit mode. By default it configures the HC in the 4 bit. Its later in
-         * our driver that we switch to 1 bit mode. If we try to shutdown, the
-         * driver hangs so we revert to 4 bit mode, to be transparent to the
-         * underlying bus driver.
-         */
-        if (onebitmode) {
-            ZERO_OBJECT(busSettings);
-            busSettings.BusModeFlags = SDDEVICE_GET_BUSMODE_FLAGS(device->handle);
-            SDCONFIG_SET_BUS_WIDTH(busSettings.BusModeFlags,
-                                   SDCONFIG_BUS_WIDTH_4_BIT);
-
-            /* Issue config request to change the bus width to 4 bit */
-            status = SDLIB_IssueConfig(device->handle, SDCONFIG_BUS_MODE_CTRL,
-                                       &busSettings,
-                                       sizeof(SDCONFIG_BUS_MODE_DATA));
-            DBG_ASSERT(SDIO_SUCCESS(status));
-        }
-
-        /* Free the bus requests */
-        for (count = 0; count < BUS_REQUEST_MAX_NUM; count ++) {
-            SDDeviceFreeRequest(device->handle, busRequest[count].request);
-        }
-        /* Clean up the queue */
-        s_busRequestFreeQueue = NULL;
+        AR_DEBUG_ASSERT(device->func != NULL);
     } else {
             /* since we are unloading the driver anyways, reset all cards in case the SDIO card
              * is externally powered and we are unloading the SDIO stack.  This avoids the problem when
              * the SDIO stack is reloaded and attempts are made to re-enumerate a card that is already
              * enumerated */
+        AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: HIFShutDownDevice, resetting\n"));
         ResetAllCards();
+
         /* Unregister with bus driver core */
-        AR_DEBUG_PRINTF(ATH_DEBUG_TRACE,
-                        ("Unregistering with the bus driver\n"));
-        status = SDIO_UnregisterFunction(&FunctionContext.function);
-        DBG_ASSERT(SDIO_SUCCESS(status));
-    }
-}
-
-void
-hifRWCompletionHandler(SDREQUEST *request)
-{
-    A_STATUS status;
-    void *context;
-    BUS_REQUEST *busrequest;
-
-    if (SDIO_SUCCESS(request->Status)) {
-        status = A_OK;
-    } else {
-        status = A_ERROR;
-    }
-
-    DBG_ASSERT(status == A_OK);
-    busrequest = (BUS_REQUEST *) request->pCompleteContext;
-    context = (void *) busrequest->context;
-        /* free the request before calling the callback, in case the
-         * callback submits another request, this guarantees that
-         * there is at least 1 free request available everytime the callback
-         * is invoked */
-    hifFreeBusRequest(busrequest);
-    htcCallbacks.rwCompletionHandler(context, status);
-}
-
-void
-hifIRQHandler(void *context)
-{
-    A_STATUS status;
-    HIF_DEVICE *device;
-
-    device = (HIF_DEVICE *)context;
-    AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("Device: %p\n", device));
-    status = htcCallbacks.dsrHandler(device->htc_handle);
-    DBG_ASSERT(status == A_OK);
-}
-
-BOOL
-hifDeviceInserted(SDFUNCTION *function, SDDEVICE *handle)
-{
-    BOOL enabled;
-    A_UINT8 data;
-    A_UINT32 count;
-    HIF_DEVICE *device;
-    SDIO_STATUS status;
-    A_UINT16 maxBlocks;
-    A_UINT16 maxBlockSize;
-    SDCONFIG_BUS_MODE_DATA busSettings;
-    SDCONFIG_FUNC_ENABLE_DISABLE_DATA fData;
-    TARGET_FUNCTION_CONTEXT *functionContext;
-    SDCONFIG_FUNC_SLOT_CURRENT_DATA slotCurrent;
-    SD_BUSCLOCK_RATE                currentBusClock;
-
-    DBG_ASSERT(function != NULL);
-    DBG_ASSERT(handle != NULL);
-
-    device = addHifDevice(handle);
-    AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("Device: %p\n", device));
-    functionContext =  (TARGET_FUNCTION_CONTEXT *)function->pContext;
-
-    /*
-     * Issue commands to get the manufacturer ID and stuff and compare it
-     * against the rev Id derived from the ID registered during the
-     * initialization process. Report the device only in the case there
-     * is a match. In the case od SDIO, the bus driver has already queried
-     * these details so we just need to use their data structures to get the
-     * relevant values. Infact, the driver has already matched it against
-     * the Ids that we registered with it so we dont need to the step here.
-     */
-
-    /* Configure the SDIO Bus Width */
-    if (onebitmode) {
-        data = SDIO_BUS_WIDTH_1_BIT;
-        status = SDLIB_IssueCMD52(handle, 0, SDIO_BUS_IF_REG, &data, 1, 1);
-        if (!SDIO_SUCCESS(status)) {
-            AR_DEBUG_PRINTF(ATH_DEBUG_ERROR,
-                            ("Unable to set the bus width to 1 bit\n"));
-            return FALSE;
-        }
-    }
-
-    /* Get current bus flags */
-    ZERO_OBJECT(busSettings);
-
-    busSettings.BusModeFlags = SDDEVICE_GET_BUSMODE_FLAGS(handle);
-    if (onebitmode) {
-        SDCONFIG_SET_BUS_WIDTH(busSettings.BusModeFlags,
-                               SDCONFIG_BUS_WIDTH_1_BIT);
-    }
-
-        /* get the current operating clock, the bus driver sets us up based
-         * on what our CIS reports and what the host controller can handle
-         * we can use this to determine whether we want to drop our clock rate
-         * down */
-    currentBusClock = SDDEVICE_GET_OPER_CLOCK(handle);
-    busSettings.ClockRate = currentBusClock;
-
-    AR_DEBUG_PRINTF(ATH_DEBUG_TRACE,
-                        ("HIF currently running at: %d \n",currentBusClock));
-
-        /* see if HIF wants to run at a lower clock speed, we may already be
-         * at that lower clock speed */
-    if (currentBusClock > (SDIO_CLOCK_FREQUENCY_DEFAULT >> busspeedlow)) {
-        busSettings.ClockRate = SDIO_CLOCK_FREQUENCY_DEFAULT >> busspeedlow;
-        AR_DEBUG_PRINTF(ATH_DEBUG_WARN,
-                        ("HIF overriding clock to %d \n",busSettings.ClockRate));
-    }
-
-    /* Issue config request to override clock rate */
-    status = SDLIB_IssueConfig(handle, SDCONFIG_FUNC_CHANGE_BUS_MODE, &busSettings,
-                               sizeof(SDCONFIG_BUS_MODE_DATA));
-    if (!SDIO_SUCCESS(status)) {
-        AR_DEBUG_PRINTF(ATH_DEBUG_ERROR,
-                        ("Unable to configure the host clock\n"));
-        return FALSE;
-    } else {
-        AR_DEBUG_PRINTF(ATH_DEBUG_TRACE,
-                        ("Configured clock: %d, Maximum clock: %d\n",
-                        busSettings.ActualClockRate,
-                        SDDEVICE_GET_MAX_CLOCK(handle)));
-    }
-
-    /*
-     * Check if the target supports block mode. This result of this check
-     * can be used to implement the HIFReadWrite API.
-     */
-    if (SDDEVICE_GET_SDIO_FUNC_MAXBLKSIZE(handle)) {
-        /* Limit block size to operational block limit or card function
-           capability */
-        maxBlockSize = min(SDDEVICE_GET_OPER_BLOCK_LEN(handle),
-                           SDDEVICE_GET_SDIO_FUNC_MAXBLKSIZE(handle));
-
-        /* check if the card support multi-block transfers */
-        if (!(SDDEVICE_GET_SDIOCARD_CAPS(handle) & SDIO_CAPS_MULTI_BLOCK)) {
-            AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("Byte basis only\n"));
-
-            /* Limit block size to max byte basis */
-            maxBlockSize =  min(maxBlockSize,
-                                (A_UINT16)SDIO_MAX_LENGTH_BYTE_BASIS);
-            maxBlocks = 1;
-        } else {
-            AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("Multi-block capable\n"));
-            maxBlocks = SDDEVICE_GET_OPER_BLOCKS(handle);
-            status = SDLIB_SetFunctionBlockSize(handle, HIF_MBOX_BLOCK_SIZE);
-            if (!SDIO_SUCCESS(status)) {
-                AR_DEBUG_PRINTF(ATH_DEBUG_ERROR,
-                                ("Failed to set block size. Err:%d\n", status));
-                return FALSE;
-            }
-        }
-
-        AR_DEBUG_PRINTF(ATH_DEBUG_TRACE,
-                        ("Bytes Per Block: %d bytes, Block Count:%d \n",
-                        maxBlockSize, maxBlocks));
-    } else {
-        AR_DEBUG_PRINTF(ATH_DEBUG_ERROR,
-                        ("Function does not support Block Mode!\n"));
-        return FALSE;
-    }
-
-    /* Allocate the slot current */
-    status = SDLIB_GetDefaultOpCurrent(handle, &slotCurrent.SlotCurrent);
-    if (SDIO_SUCCESS(status)) {
-        AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("Allocating Slot current: %d mA\n",
-                                slotCurrent.SlotCurrent));
-        status = SDLIB_IssueConfig(handle, SDCONFIG_FUNC_ALLOC_SLOT_CURRENT,
-                                   &slotCurrent, sizeof(slotCurrent));
-        if (!SDIO_SUCCESS(status)) {
-            AR_DEBUG_PRINTF(ATH_DEBUG_ERROR,
-                            ("Failed to allocate slot current %d\n", status));
-            return FALSE;
-        }
-    }
-
-    /* Enable the dragon function */
-    count = 0;
-    enabled = FALSE;
-    fData.TimeOut = 1;
-    fData.EnableFlags = SDCONFIG_ENABLE_FUNC;
-    while ((count++ < SDWLAN_ENABLE_DISABLE_TIMEOUT) && !enabled)
-    {
-        /* Enable dragon */
-        status = SDLIB_IssueConfig(handle, SDCONFIG_FUNC_ENABLE_DISABLE,
-                                   &fData, sizeof(fData));
-        if (!SDIO_SUCCESS(status)) {
+        if (registered) {
+            registered = 0;
             AR_DEBUG_PRINTF(ATH_DEBUG_TRACE,
-                            ("Attempting to enable the card again\n"));
-            continue;
+                            ("AR6000: Unregistering with the bus driver\n"));
+            sdio_unregister_driver(&ar6k_driver);
+            AR_DEBUG_PRINTF(ATH_DEBUG_TRACE,
+                            ("AR6000: Unregistered\n"));
         }
-
-        /* Mark the status as enabled */
-        enabled = TRUE;
     }
-
-    /* Check if we were succesful in enabling the target */
-    if (!enabled) {
-        AR_DEBUG_PRINTF(ATH_DEBUG_ERROR,
-                        ("Failed to communicate with the target\n"));
-        return FALSE;
-    }
-
-    /* Allocate the bus requests to be used later */
-    A_MEMZERO(busRequest, sizeof(busRequest));
-    for (count = 0; count < BUS_REQUEST_MAX_NUM; count ++) {
-        if ((busRequest[count].request = SDDeviceAllocRequest(handle)) == NULL){
-            AR_DEBUG_PRINTF(ATH_DEBUG_ERROR, ("Unable to allocate memory\n"));
-            /* TODO: Free the memory that has already been allocated */
-            return FALSE;
-        }
-        hifFreeBusRequest(&busRequest[count]);
-
-        AR_DEBUG_PRINTF(ATH_DEBUG_TRACE,
-                ("0x%08x = busRequest[%d].request = 0x%08x\n",
-				(unsigned int) &busRequest[count], count,
-				(unsigned int) busRequest[count].request));
-    }
-
-        /* Schedule a worker to handle device inserted, this is a temporary workaround
-         * to fix a deadlock if the device fails to intialize in the insertion handler
-         * The failure causes the instance to shutdown the HIF layer and unregister the
-         * function driver within the busdriver probe context which can deadlock
-         *
-         * NOTE: we cannot use the default work queue because that would block
-         * SD bus request processing for all synchronous I/O. We must use a kernel
-         * thread that is creating using the helper library.
-         * */
-
-    if (SDIO_SUCCESS(SDLIB_OSCreateHelper(&device->insert_helper,
-                         insert_helper_func,
-                         device))) {
-        device->helper_started = TRUE;
-    }
-
-    return TRUE;
+    AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: -HIFShutDownDevice\n"));
 }
 
-static THREAD_RETURN insert_helper_func(POSKERNEL_HELPER pHelper)
+static void
+hifIRQHandler(struct sdio_func *func)
 {
+    A_STATUS status;
+    HIF_DEVICE *device;
+    AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: +hifIRQHandler\n"));
 
-    /*
-     * Adding a wait of around a second before we issue the very first
-     * command to dragon. During the process of loading/unloading the
-     * driver repeatedly it was observed that we get a data timeout
-     * while accessing function 1 registers in the chip. The theory at
-     * this point is that some initialization delay in dragon is
-     * causing the SDIO state in dragon core to be not ready even after
-     * the ready bit indicates that function 1 is ready. Accomodating
-     * for this behavior by adding some delay in the driver before it
-     * issues the first command after switching on dragon. Need to
-     * investigate this a bit more - TODO
-     */
+    /*BU5D02101,WIFI Module,hanshirong 66539,20100208 begin++ */
+	if (!ar6000_suspend_flag)
+		wake_lock_timeout(&timeout_wake_lock, HZ/2);
+    /*BU5D02101,WIFI Module,hanshirong 66539,20100208 end-- */
+    device = getHifDevice(func);
+    /* release the host during ints so we can pick it back up when we process cmds */
+    sdio_release_host(device->func);
+    status = device->htcCallbacks.dsrHandler(device->htcCallbacks.context);
+    sdio_claim_host(device->func);
+    AR_DEBUG_ASSERT(status == A_OK);
+    AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: -hifIRQHandler\n"));
+}
 
-    A_MDELAY(1000);
-        /* Inform HTC */
-    if ((htcCallbacks.deviceInsertedHandler(SD_GET_OS_HELPER_CONTEXT(pHelper))) != A_OK) {
-        AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("Device rejected\n"));
+/* handle HTC startup via thread*/
+static int startup_task(void *param)
+{
+    HIF_DEVICE *device;
+
+    device = (HIF_DEVICE *)param;
+    AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: call HTC from startup_task\n"));
+/* ATHENV */
+#ifdef ANDROID_ENV
+    wake_lock(&ar6k_init_wake_lock);
+#endif
+/* ATHENV */
+        /* start  up inform DRV layer */
+    if ((osdrvCallbacks.deviceInsertedHandler(osdrvCallbacks.context,device)) != A_OK) {
+        AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: Device rejected\n"));
     }
-
+/* ATHENV */
+#ifdef ANDROID_ENV
+    wake_unlock(&ar6k_init_wake_lock);
+#endif
+/* ATHENV */
     return 0;
 }
+
+static int hifDeviceInserted(struct sdio_func *func, const struct sdio_device_id *id)
+{
+    int ret;
+    HIF_DEVICE * device;
+    int count;
+    struct task_struct* startup_task_struct;
+
+    AR_DEBUG_PRINTF(ATH_DEBUG_TRACE,
+		    ("AR6000: hifDeviceInserted, Function: 0x%X, Vendor ID: 0x%X, Device ID: 0x%X, block size: 0x%X/0x%X\n",
+		     func->num, func->vendor, func->device, func->max_blksize, func->cur_blksize));
+
+    addHifDevice(func);
+    device = getHifDevice(func);
+
+    spin_lock_init(&device->lock);
+
+    spin_lock_init(&device->asynclock);
+
+        /* enable the SDIO function */
+    AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: claim\n"));
+    sdio_claim_host(func);
+    AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: enable\n"));
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,27)
+    /* give us some time to enable, in ms */
+    func->enable_timeout = 100;
+#endif
+
+    ret = sdio_enable_func(func);
+    if (ret) {
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,27)
+        AR_DEBUG_PRINTF(ATH_DEBUG_ERROR, ("AR6000: %s(), Unable to enable AR6K: 0x%X, timeout: %d\n",
+					  __FUNCTION__, ret, func->enable_timeout));
+#else
+
+        AR_DEBUG_PRINTF(ATH_DEBUG_ERROR, ("AR6000: %s(), Unable to enable AR6K: 0x%X\n",
+					  __FUNCTION__, ret));
+#endif
+        sdio_release_host(func);
+        return ret;
+    }
+    AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: set block size 0x%X\n", HIF_MBOX_BLOCK_SIZE));
+    ret = sdio_set_block_size(func, HIF_MBOX_BLOCK_SIZE);
+    sdio_release_host(func);
+    if (ret) {
+        AR_DEBUG_PRINTF(ATH_DEBUG_ERROR, ("AR6000: %s(), Unable to set block size 0x%x  AR6K: 0x%X\n",
+					  __FUNCTION__, HIF_MBOX_BLOCK_SIZE, ret));
+        sdio_release_host(func);
+        return ret;
+    }
+    /* Initialize the bus requests to be used later */
+    A_MEMZERO(device->busRequest, sizeof(device->busRequest));
+    for (count = 0; count < BUS_REQUEST_MAX_NUM; count ++) {
+        sema_init(&device->busRequest[count].sem_req, 0);
+        hifFreeBusRequest(device, &device->busRequest[count]);
+    }
+
+    /* create async I/O thread */
+    device->async_shutdown = 0;
+    device->async_task = kthread_create(async_task,
+                                       (void *)device,
+                                       "AR6K Async");
+    if (device->async_task == NULL) {
+        AR_DEBUG_PRINTF(ATH_DEBUG_ERROR, ("AR6000: %s(), to create async task\n", __FUNCTION__));
+        sdio_release_host(func);
+        return A_ERROR;
+    }
+    AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: start async task\n"));
+    sema_init(&device->sem_async, 0);
+    wake_up_process(device->async_task );
+
+    /* create startup thread */
+    startup_task_struct = kthread_create(startup_task,
+                                  (void *)device,
+                                  "AR6K startup");
+    if (startup_task_struct == NULL) {
+        AR_DEBUG_PRINTF(ATH_DEBUG_ERROR, ("AR6000: %s(), to create startup task\n", __FUNCTION__));
+        sdio_release_host(func);
+        return A_ERROR;
+    }
+    AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: start startup task\n"));
+    wake_up_process(startup_task_struct);
+
+    AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: return %d\n", ret));
+    return ret;
+}
+
 
 void
 HIFAckInterrupt(HIF_DEVICE *device)
 {
-    SDIO_STATUS status;
-    DBG_ASSERT(device != NULL);
-    DBG_ASSERT(device->handle != NULL);
+    AR_DEBUG_ASSERT(device != NULL);
 
     /* Acknowledge our function IRQ */
-    status = SDLIB_IssueConfig(device->handle, SDCONFIG_FUNC_ACK_IRQ,
-                               NULL, 0);
-    DBG_ASSERT(SDIO_SUCCESS(status));
 }
 
 void
 HIFUnMaskInterrupt(HIF_DEVICE *device)
 {
-    SDIO_STATUS status;
+    int ret;;
 
-    DBG_ASSERT(device != NULL);
-    DBG_ASSERT(device->handle != NULL);
+    AR_DEBUG_ASSERT(device != NULL);
+    AR_DEBUG_ASSERT(device->func != NULL);
+
+    AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: HIFUnMaskInterrupt\n"));
 
     /* Register the IRQ Handler */
-    SDDEVICE_SET_IRQ_HANDLER(device->handle, hifIRQHandler, device);
-
-    /* Unmask our function IRQ */
-    status = SDLIB_IssueConfig(device->handle, SDCONFIG_FUNC_UNMASK_IRQ,
-                               NULL, 0);
-    DBG_ASSERT(SDIO_SUCCESS(status));
+    sdio_claim_host(device->func);
+    ret = sdio_claim_irq(device->func, hifIRQHandler);
+    sdio_release_host(device->func);
+    AR_DEBUG_ASSERT(ret == 0);
 }
 
 void HIFMaskInterrupt(HIF_DEVICE *device)
 {
-    SDIO_STATUS status;
-    DBG_ASSERT(device != NULL);
-    DBG_ASSERT(device->handle != NULL);
+    int ret;;
+
+    AR_DEBUG_ASSERT(device != NULL);
+    AR_DEBUG_ASSERT(device->func != NULL);
+
+    AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: HIFMaskInterrupt\n"));
 
     /* Mask our function IRQ */
-    status = SDLIB_IssueConfig(device->handle, SDCONFIG_FUNC_MASK_IRQ,
-                               NULL, 0);
-    DBG_ASSERT(SDIO_SUCCESS(status));
-
-    /* Unregister the IRQ Handler */
-    SDDEVICE_SET_IRQ_HANDLER(device->handle, NULL, NULL);
+    sdio_claim_host(device->func);
+    ret = sdio_release_irq(device->func);
+    sdio_release_host(device->func);
+    AR_DEBUG_ASSERT(ret == 0);
 }
 
-static BUS_REQUEST *hifAllocateBusRequest(void)
+static BUS_REQUEST *hifAllocateBusRequest(HIF_DEVICE *device)
 {
     BUS_REQUEST *busrequest;
+    unsigned long flag;
 
     /* Acquire lock */
-    CriticalSectionAcquire(&lock);
+    spin_lock_irqsave(&device->lock, flag);
 
     /* Remove first in list */
-    if((busrequest = s_busRequestFreeQueue) != NULL)
+    if((busrequest = device->s_busRequestFreeQueue) != NULL)
     {
-        s_busRequestFreeQueue = busrequest->next;
+        device->s_busRequestFreeQueue = busrequest->next;
     }
 
     /* Release lock */
-    CriticalSectionRelease(&lock);
-
+    spin_unlock_irqrestore(&device->lock, flag);
+    AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: hifAllocateBusRequest: 0x%p\n", busrequest));
     return busrequest;
 }
 
 static void
-hifFreeBusRequest(BUS_REQUEST *busrequest)
+hifFreeBusRequest(HIF_DEVICE *device, BUS_REQUEST *busrequest)
 {
-    DBG_ASSERT(busrequest != NULL);
+    unsigned long flag;
 
+    AR_DEBUG_ASSERT(busrequest != NULL);
+    AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: hifFreeBusRequest: 0x%p\n", busrequest));
     /* Acquire lock */
-    CriticalSectionAcquire(&lock);
+    spin_lock_irqsave(&device->lock, flag);
+
 
     /* Insert first in list */
-    busrequest->next = s_busRequestFreeQueue;
-    s_busRequestFreeQueue = busrequest;
+    busrequest->next = device->s_busRequestFreeQueue;
+    busrequest->inusenext = NULL;
+    device->s_busRequestFreeQueue = busrequest;
 
     /* Release lock */
-    CriticalSectionRelease(&lock);
+    spin_unlock_irqrestore(&device->lock, flag);
 }
 
-void
-hifDeviceRemoved(SDFUNCTION *function, SDDEVICE *handle)
+static void hifDeviceRemoved(struct sdio_func *func)
 {
-    A_STATUS status;
+    A_STATUS status = A_OK;
     HIF_DEVICE *device;
-    DBG_ASSERT(function != NULL);
-    DBG_ASSERT(handle != NULL);
+    int ret;
+    AR_DEBUG_ASSERT(func != NULL);
 
-    device = getHifDevice(handle);
-    status = htcCallbacks.deviceRemovedHandler(device->htc_handle, A_OK);
-
-        /* cleanup the helper thread */
-    if (device->helper_started) {
-        SDLIB_OSDeleteHelper(&device->insert_helper);
-        device->helper_started = FALSE;
+    AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: +hifDeviceRemoved\n"));
+    device = getHifDevice(func);
+    if (device->claimedContext != NULL) {
+        status = osdrvCallbacks.deviceRemovedHandler(device->claimedContext, device);
     }
 
-    delHifDevice(handle);
-    DBG_ASSERT(status == A_OK);
+    if (device->async_task != NULL) {
+        init_completion(&device->async_completion);
+        device->async_shutdown = 1;
+        up(&device->sem_async);
+        wait_for_completion(&device->async_completion);
+        device->async_task = NULL;
+    }
+    /* Disable the card */
+    sdio_claim_host(device->func);
+    ret = sdio_disable_func(device->func);
+    sdio_release_host(device->func);
+    delHifDevice(device);
+    AR_DEBUG_ASSERT(status == A_OK);
+    AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: -hifDeviceRemoved\n"));
 }
 
-HIF_DEVICE *
-addHifDevice(SDDEVICE *handle)
+
+static HIF_DEVICE *
+addHifDevice(struct sdio_func *func)
 {
-    DBG_ASSERT(handle != NULL);
-    hifDevice[0].handle = handle;
-    return &hifDevice[0];
+    HIF_DEVICE *hifdevice;
+    AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: addHifDevice\n"));
+    AR_DEBUG_ASSERT(func != NULL);
+    hifdevice = (HIF_DEVICE *)kzalloc(sizeof(HIF_DEVICE), GFP_KERNEL);
+    AR_DEBUG_ASSERT(hifdevice != NULL);
+#if HIF_USE_DMA_BOUNCE_BUFFER
+    hifdevice->dma_buffer = kmalloc(HIF_DMA_BUFFER_SIZE, GFP_KERNEL);
+    AR_DEBUG_ASSERT(hifdevice->dma_buffer != NULL);
+#endif
+    hifdevice->func = func;
+    sdio_set_drvdata(func, hifdevice);
+    AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: addHifDevice; 0x%p\n", hifdevice));
+    return hifdevice;
 }
 
-HIF_DEVICE *
-getHifDevice(SDDEVICE *handle)
+static HIF_DEVICE *
+getHifDevice(struct sdio_func *func)
 {
-    DBG_ASSERT(handle != NULL);
-    return &hifDevice[0];
+    AR_DEBUG_ASSERT(func != NULL);
+    return (HIF_DEVICE *)sdio_get_drvdata(func);
 }
 
-void
-delHifDevice(SDDEVICE *handle)
+static void
+delHifDevice(HIF_DEVICE * device)
 {
-    DBG_ASSERT(handle != NULL);
-    hifDevice[0].handle = NULL;
-}
-
-struct device*
-HIFGetOSDevice(HIF_DEVICE *device)
-{
-    return &device->handle->Device->dev;
+    AR_DEBUG_ASSERT(device!= NULL);
+    AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: delHifDevice; 0x%p\n", device));
+    if (device->dma_buffer != NULL) {
+        kfree(device->dma_buffer);
+    }
+    kfree(device);
 }
 
 static void ResetAllCards(void)
 {
-    UINT8       data;
-    SDIO_STATUS status;
-    int         i;
-
-    data = SDIO_IO_RESET;
-
-    /* set the I/O CARD reset bit:
-     * NOTE: we are exploiting a "feature" of the SDIO core that resets the core when you
-     * set the RES bit in the SDIO_IO_ABORT register.  This bit however "normally" resets the
-     * I/O functions leaving the SDIO core in the same state (as per SDIO spec).
-     * In this design, this reset can be used to reset the SDIO core itself */
-    for (i = 0; i < HIF_MAX_DEVICES; i++) {
-        if (hifDevice[i].handle != NULL) {
-            AR_DEBUG_PRINTF(ATH_DEBUG_TRACE,
-                        ("Issuing I/O Card reset for instance: %d \n",i));
-                /* set the I/O Card reset bit */
-            status = SDLIB_IssueCMD52(hifDevice[i].handle,
-                                      0,                    /* function 0 space */
-                                      SDIO_IO_ABORT_REG,
-                                      &data,
-                                      1,                    /* 1 byte */
-                                      TRUE);                /* write */
-        }
-    }
-
 }
 
-void HIFSetHandle(void *hif_handle, void *handle)
+void HIFClaimDevice(HIF_DEVICE  *device, void *context)
 {
-    HIF_DEVICE *device = (HIF_DEVICE *) hif_handle;
-
-    device->htc_handle = handle;
-
-    return;
+    device->claimedContext = context;
 }
+
+void HIFReleaseDevice(HIF_DEVICE  *device)
+{
+    device->claimedContext = NULL;
+}
+
+A_STATUS HIFAttachHTC(HIF_DEVICE *device, HTC_CALLBACKS *callbacks)
+{
+    if (device->htcCallbacks.context != NULL) {
+            /* already in use! */
+        return A_ERROR;
+    }
+    device->htcCallbacks = *callbacks;
+    return A_OK;
+}
+
+void HIFDetachHTC(HIF_DEVICE *device)
+{
+    A_MEMZERO(&device->htcCallbacks,sizeof(device->htcCallbacks));
+}
+
+
+
+

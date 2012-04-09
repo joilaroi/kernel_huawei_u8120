@@ -1,10 +1,23 @@
+//------------------------------------------------------------------------------
+// <copyright file="wmi.h" company="Atheros">
+//    Copyright (c) 2004-2008 Atheros Corporation.  All rights reserved.
+// 
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License version 2 as
+// published by the Free Software Foundation;
+//
+// Software distributed under the License is distributed on an "AS
+// IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// rights and limitations under the License.
+//
+//
+//------------------------------------------------------------------------------
+//==============================================================================
+// Author(s): ="Atheros"
+//==============================================================================
+
 /*
- * Copyright (c) 2004-2006 Atheros Communications Inc.
- * All rights reserved.
- *
- *
- * $ATH_LICENSE_HOSTSDK0_C$
- *
  * This file contains the definitions of the WMI protocol specified in the
  * Wireless Module Interface (WMI).  It includes definitions of all the
  * commands and events. Commands are messages from the host to the WM.
@@ -28,6 +41,9 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#define HTC_PROTOCOL_VERSION    0x0002
+#define HTC_PROTOCOL_REVISION   0x0000
 
 #define WMI_PROTOCOL_VERSION    0x0002
 #define WMI_PROTOCOL_REVISION   0x0000
@@ -68,7 +84,8 @@ typedef PREPACK struct {
 typedef enum {
     DATA_MSGTYPE = 0x0,
     CNTL_MSGTYPE,
-    SYNC_MSGTYPE
+    SYNC_MSGTYPE,
+    OPT_MSGTYPE,
 } WMI_MSG_TYPE;
 
 
@@ -81,6 +98,17 @@ typedef PREPACK struct {
 #define WMI_DATA_HDR_UP_MASK        0x07
 #define WMI_DATA_HDR_UP_SHIFT       2
 #define WMI_DATA_HDR_IS_MSG_TYPE(h, t)  (((h)->info & (WMI_DATA_HDR_MSG_TYPE_MASK)) == (t))
+/* In AP mode, the same bit (b5) is used to indicate Power save state in
+ * the Rx dir and More data bit state in the tx direction.
+ */
+#define WMI_DATA_HDR_PS_MASK 0x1
+#define WMI_DATA_HDR_PS_SHIFT 5
+
+#define WMI_DATA_HDR_MORE_MASK 0x1
+#define WMI_DATA_HDR_MORE_SHIFT 5
+
+#define WMI_DATA_HDR_SET_MORE_BIT(h) ((h)->info |= (WMI_DATA_HDR_MORE_MASK << WMI_DATA_HDR_MORE_SHIFT))
+
 } POSTPACK WMI_DATA_HDR;
 
 
@@ -107,7 +135,7 @@ typedef enum {
     WMI_START_SCAN_CMDID,
     WMI_SET_SCAN_PARAMS_CMDID,
     WMI_SET_BSS_FILTER_CMDID,
-    WMI_SET_PROBED_SSID_CMDID,
+    WMI_SET_PROBED_SSID_CMDID,               /* 10 */
     WMI_SET_LISTEN_INT_CMDID,
     WMI_SET_BMISS_TIME_CMDID,
     WMI_SET_DISC_TIMEOUT_CMDID,
@@ -117,7 +145,7 @@ typedef enum {
     WMI_SET_CHANNEL_PARAMS_CMDID,
     WMI_SET_POWER_MODE_CMDID,
     WMI_SET_IBSS_PM_CAPS_CMDID,
-    WMI_SET_POWER_PARAMS_CMDID,
+    WMI_SET_POWER_PARAMS_CMDID,              /* 20 */
     WMI_SET_POWERSAVE_TIMERS_POLICY_CMDID,
     WMI_ADD_CIPHER_KEY_CMDID,
     WMI_DELETE_CIPHER_KEY_CMDID,
@@ -127,7 +155,7 @@ typedef enum {
     WMI_SET_TX_PWR_CMDID,
     WMI_GET_TX_PWR_CMDID,
     WMI_SET_ASSOC_INFO_CMDID,
-    WMI_ADD_BAD_AP_CMDID,
+    WMI_ADD_BAD_AP_CMDID,                    /* 30 */
     WMI_DELETE_BAD_AP_CMDID,
     WMI_SET_TKIP_COUNTERMEASURES_CMDID,
     WMI_RSSI_THRESHOLD_PARAMS_CMDID,
@@ -137,7 +165,7 @@ typedef enum {
     WMI_SET_OPT_MODE_CMDID,
     WMI_OPT_TX_FRAME_CMDID,
     WMI_SET_VOICE_PKT_SIZE_CMDID,
-    WMI_SET_MAX_SP_LEN_CMDID,
+    WMI_SET_MAX_SP_LEN_CMDID,                /* 40 */
     WMI_SET_ROAM_CTRL_CMDID,
     WMI_GET_ROAM_TBL_CMDID,
     WMI_GET_ROAM_DATA_CMDID,
@@ -147,7 +175,7 @@ typedef enum {
     WMI_SNR_THRESHOLD_PARAMS_CMDID,
     WMI_LQ_THRESHOLD_PARAMS_CMDID,
     WMI_SET_LPREAMBLE_CMDID,
-    WMI_SET_RTS_CMDID,
+    WMI_SET_RTS_CMDID,                       /* 50 */
     WMI_CLR_RSSI_SNR_CMDID,
     WMI_SET_FIXRATES_CMDID,
     WMI_GET_FIXRATES_CMDID,
@@ -157,7 +185,7 @@ typedef enum {
     WMI_SET_WMM_TXOP_CMDID,
     WMI_TEST_CMDID,
     WMI_SET_BT_STATUS_CMDID,
-    WMI_SET_BT_PARAMS_CMDID,
+    WMI_SET_BT_PARAMS_CMDID,                 /* 60 */
 
     WMI_SET_KEEPALIVE_CMDID,
     WMI_GET_KEEPALIVE_CMDID,
@@ -170,12 +198,9 @@ typedef enum {
     WMI_SET_WOW_MODE_CMDID,
     WMI_GET_WOW_LIST_CMDID,
     WMI_ADD_WOW_PATTERN_CMDID,
-    WMI_DEL_WOW_PATTERN_CMDID,
-    WMI_SET_MAC_ADDRESS_CMDID,
-    WMI_SET_AKMP_PARAMS_CMDID,
-    WMI_SET_PMKID_LIST_CMDID,
-    WMI_GET_PMKID_LIST_CMDID,
+    WMI_DEL_WOW_PATTERN_CMDID,               /* 70 */
 
+    WMI_SET_FRAMERATES_CMDID,
     /*
      * Developer commands starts at 0xF000
      */
@@ -183,6 +208,40 @@ typedef enum {
     WMI_GET_BITRATE_CMDID,
     WMI_SET_WHALPARAM_CMDID,
 
+
+    /*Should add the new command to the tail for compatible with
+     * etna.
+     */
+    WMI_SET_MAC_ADDRESS_CMDID,
+    WMI_SET_AKMP_PARAMS_CMDID,
+    WMI_SET_PMKID_LIST_CMDID,
+    WMI_GET_PMKID_LIST_CMDID,
+    WMI_ABORT_SCAN_CMDID,
+    WMI_SET_TARGET_EVENT_REPORT_CMDID,
+
+    // Pyxis specific Command IDs
+    WMI_PYXIS_CONFIG_CMDID,
+    WMI_PYXIS_OPERATION_CMDID,    /* 0xF00A */
+
+    /*
+     * AP mode commands
+     */
+    WMI_AP_HIDDEN_SSID_CMDID,
+    WMI_AP_SET_NUM_STA_CMDID,
+    WMI_AP_ACL_POLICY_CMDID,
+    WMI_AP_ACL_MAC_LIST_CMDID,
+    WMI_AP_CONFIG_COMMIT_CMDID,
+    WMI_AP_SET_MLME_CMDID,
+    WMI_AP_SET_PVB_CMDID,
+    WMI_AP_CONN_INACT_CMDID,
+    WMI_AP_PROT_SCAN_TIME_CMDID,
+    WMI_AP_SET_COUNTRY_CMDID,     /* 0xF014 */
+    WMI_AP_SET_DTIM_CMDID,
+
+    WMI_SET_IP_CMDID,
+    WMI_SET_PARAMS_CMDID,
+    WMI_SET_MCAST_FILTER_CMDID,
+    WMI_DEL_MCAST_FILTER_CMDID
 } WMI_COMMAND_ID;
 
 /*
@@ -204,6 +263,8 @@ typedef enum {
     INFRA_NETWORK       = 0x01,
     ADHOC_NETWORK       = 0x02,
     ADHOC_CREATOR       = 0x04,
+    OPT_NETWORK         = 0x08,
+    AP_NETWORK          = 0x10,
 } NETWORK_TYPE;
 
 typedef enum {
@@ -227,13 +288,36 @@ typedef enum {
     WEP_CRYPT           = 0x02,
     TKIP_CRYPT          = 0x03,
     AES_CRYPT           = 0x04,
+/*BU5D02447,WIFI Module,hanshirong 66539,20100204 begin++ */
+#ifdef WAPI_ENABLE
+    WAPI_CRYPT          = 0x05,
+#endif /* WAPI_ENABLE */
+/*BU5D02447,WIFI Module,hanshirong 66539,20100204 end-- */
 } CRYPTO_TYPE;
+
+/*BU5D02447,WIFI Module,hanshirong 66539,20100204 begin++ */
+#ifdef WAPI_ENABLE
+#define IW_ENCODE_ALG_SM4              0x20
+#define IW_AUTH_WAPI_ENABLED           0x20
+#endif /* WAPI_ENABLE */
 
 #define WMI_MIN_CRYPTO_TYPE NONE_CRYPT
 #define WMI_MAX_CRYPTO_TYPE (AES_CRYPT + 1)
 
+#ifdef WAPI_ENABLE
+#undef WMI_MAX_CRYPTO_TYPE
+#define WMI_MAX_CRYPTO_TYPE (WAPI_CRYPT + 1)
+#endif /* WAPI_ENABLE */
+
+
 #define WMI_MIN_KEY_INDEX   0
 #define WMI_MAX_KEY_INDEX   3
+
+#ifdef WAPI_ENABLE
+#undef WMI_MAX_KEY_INDEX
+#define WMI_MAX_KEY_INDEX   7 /* wapi grpKey 0-3, prwKey 4-7 */
+#endif /* WAPI_ENABLE */
+/*BU5D02447,WIFI Module,hanshirong 66539,20100204 end-- */
 
 #define WMI_MAX_KEY_LEN     32
 
@@ -246,9 +330,10 @@ typedef enum {
     CONNECT_PROFILE_MATCH_DONE = 0x0008,
     CONNECT_IGNORE_AAC_BEACON = 0x0010,
     CONNECT_CSA_FOLLOW_BSS = 0x0020,
+    CONNECT_PYXIS_REMOTE = 0x0040,
 } WMI_CONNECT_CTRL_FLAGS_BITS;
 
-#define DEFAULT_CONNECT_CTRL_FLAGS         (CONNECT_CSA_FOLLOW_BSS)
+#define DEFAULT_CONNECT_CTRL_FLAGS    (CONNECT_CSA_FOLLOW_BSS)
 
 typedef PREPACK struct {
     A_UINT8     networkType;
@@ -288,18 +373,24 @@ typedef enum {
  */
 #define KEY_OP_INIT_TSC       0x01
 #define KEY_OP_INIT_RSC       0x02
+/*BU5D02447,WIFI Module,hanshirong 66539,20100204 begin++ */
+#ifdef WAPI_ENABLE
+#define KEY_OP_INIT_WAPIPN    0x10
+#endif /* WAPI_ENABLE */
+/*BU5D02447,WIFI Module,hanshirong 66539,20100204 end-- */
 
 #define KEY_OP_INIT_VAL     0x03     /* Default Initialise the TSC & RSC */
 #define KEY_OP_VALID_MASK   0x03
 
 typedef PREPACK struct {
-    A_UINT8     keyIndex;
-    A_UINT8     keyType;
-    A_UINT8     keyUsage;           /* KEY_USAGE */
-    A_UINT8     keyLength;
-    A_UINT8     keyRSC[8];          /* key replay sequence counter */
-    A_UINT8     key[WMI_MAX_KEY_LEN];
-    A_UINT8     key_op_ctrl;       /* Additional Key Control information */
+    A_UINT8    keyIndex;
+    A_UINT8    keyType;
+    A_UINT8    keyUsage;           /* KEY_USAGE */
+    A_UINT8    keyLength;
+    A_UINT8    keyRSC[8];          /* key replay sequence counter */
+    A_UINT8    key[WMI_MAX_KEY_LEN];
+    A_UINT8    key_op_ctrl;       /* Additional Key Control information */
+    A_UINT8    key_macaddr[ATH_MAC_LEN];
 } POSTPACK WMI_ADD_CIPHER_KEY_CMD;
 
 /*
@@ -352,6 +443,8 @@ typedef PREPACK struct {
 typedef enum {
     WMI_LONG_SCAN  = 0,
     WMI_SHORT_SCAN = 1,
+    WMI_PYXIS_PAS_DSCVR = 0,
+    WMI_PYXIS_ACT_DSCVR = 1,
 } WMI_SCAN_TYPE;
 
 typedef PREPACK struct {
@@ -360,6 +453,8 @@ typedef PREPACK struct {
     A_UINT32 homeDwellTime;   /* Maximum duration in the home channel(milliseconds) */
     A_UINT32 forceScanInterval;    /* Time interval between scans (milliseconds)*/
     A_UINT8  scanType;           /* WMI_SCAN_TYPE */
+    A_UINT8  numChannels;            /* how many channels follow */
+    A_UINT16 channelList[1];         /* channels in Mhz */
 } POSTPACK WMI_START_SCAN_CMD;
 
 /*
@@ -399,6 +494,7 @@ typedef PREPACK struct {
     A_UINT8     shortScanRatio;         /* how many shorts scan for one long */
     A_UINT8     scanCtrlFlags;
     A_UINT16    minact_chdwell_time;    /* msec */
+    A_UINT16    maxact_scan_per_ssid;   /* max active scans per ssid */
     A_UINT32    max_dfsch_act_time;  /* msecs */
 } POSTPACK WMI_SCAN_PARAMS_CMD;
 
@@ -418,6 +514,8 @@ typedef enum {
 
 typedef PREPACK struct {
     A_UINT8    bssFilter;                      /* see WMI_BSS_FILTER */
+    A_UINT8    reserved1;                      /* For alignment */
+    A_UINT16   reserved2;                      /* For alignment */
     A_UINT32   ieMask;
 } POSTPACK WMI_BSS_FILTER_CMD;
 
@@ -486,6 +584,20 @@ typedef enum {
 typedef PREPACK struct {
     A_UINT8     powerMode;      /* WMI_POWER_MODE */
 } POSTPACK WMI_POWER_MODE_CMD;
+
+typedef PREPACK struct {
+    A_INT8 status;      /* WMI_SET_PARAMS_REPLY */
+} POSTPACK WMI_SET_PARAMS_REPLY;
+
+typedef PREPACK struct {
+    A_UINT32 opcode;
+    A_UINT32 length;
+    A_CHAR buffer[1];      /* WMI_SET_PARAMS */
+} POSTPACK WMI_SET_PARAMS_CMD;
+
+typedef PREPACK struct {
+    A_UINT8 multicast_mac[ATH_MAC_LEN];      /* WMI_SET_MCAST_FILTER */
+} POSTPACK WMI_SET_MCAST_FILTER_CMD;
 
 /*
  * WMI_SET_POWER_PARAMS_CMDID
@@ -572,6 +684,13 @@ typedef enum {
 }TRAFFIC_TYPE;
 
 /*
+ * WMI_SYNCHRONIZE_CMDID
+ */
+typedef PREPACK struct {
+    A_UINT8 dataSyncMap;
+} POSTPACK WMI_SYNC_CMD;
+
+/*
  * WMI_CREATE_PSTREAM_CMDID
  */
 typedef PREPACK struct {
@@ -591,17 +710,22 @@ typedef PREPACK struct {
     A_UINT16        nominalMSDU;             /* in octects */
     A_UINT16        maxMSDU;                 /* in octects */
     A_UINT8         trafficClass;
+    A_UINT8         trafficDirection;        /* DIR_TYPE */
+    A_UINT8         rxQueueNum;
     A_UINT8         trafficType;             /* TRAFFIC_TYPE */
-    A_UINT8         trafficDirection;        /* TRAFFIC_DIR */
     A_UINT8         voicePSCapability;       /* VOICEPS_CAP_TYPE */
     A_UINT8         tsid;
     A_UINT8         userPriority;            /* 802.1D user priority */
+    A_UINT8         nominalPHY;              /* nominal phy rate */
 } POSTPACK WMI_CREATE_PSTREAM_CMD;
 
 /*
  * WMI_DELETE_PSTREAM_CMDID
  */
 typedef PREPACK struct {
+    A_UINT8     txQueueNumber;
+    A_UINT8     rxQueueNumber;
+    A_UINT8     trafficDirection;
     A_UINT8     trafficClass;
     A_UINT8     tsid;
 } POSTPACK WMI_DELETE_PSTREAM_CMD;
@@ -883,16 +1007,32 @@ typedef enum {
     BT_STREAM_UNDEF = 0,
     BT_STREAM_SCO,             /* SCO stream */
     BT_STREAM_A2DP,            /* A2DP stream */
+    BT_STREAM_SCAN,            /* BT Discovery or Page */
+    BT_STREAM_ESCO,
     BT_STREAM_MAX
 } BT_STREAM_TYPE;
 
 typedef enum {
     BT_PARAM_SCO = 1,         /* SCO stream parameters */
-    BT_PARAM_A2DP,            /* A2DP stream parameters */
-    BT_PARAM_MISC,            /* miscellaneous parameters */
-    BT_PARAM_REGS,            /* co-existence register parameters */
+    BT_PARAM_A2DP ,
+    BT_PARAM_ANTENNA_CONFIG,
+    BT_PARAM_COLOCATED_BT_DEVICE,
+    BT_PARAM_ACLCOEX,
+    BT_PARAM_11A_SEPARATE_ANT,
     BT_PARAM_MAX
 } BT_PARAM_TYPE;
+
+typedef enum {
+    BT_PARAM_SCO_PSPOLL_LATENCY_ONE_FOURTH =1,
+    BT_PARAM_SCO_PSPOLL_LATENCY_HALF,
+    BT_PARAM_SCO_PSPOLL_LATENCY_THREE_FOURTH,
+} BT_PARAMS_SCO_PSPOLL_LATENCY;
+
+typedef enum {
+    BT_PARAMS_SCO_STOMP_SCO_NEVER =1,
+    BT_PARAMS_SCO_STOMP_SCO_ALWAYS,
+    BT_PARAMS_SCO_STOMP_SCO_IN_LOWRSSI,
+} BT_PARAMS_SCO_STOMP_RULES;
 
 typedef enum {
     BT_STATUS_UNDEF = 0,
@@ -908,17 +1048,105 @@ typedef PREPACK struct {
     A_UINT8 status;
 } POSTPACK WMI_SET_BT_STATUS_CMD;
 
+typedef enum {
+    BT_ANT_TYPE_UNDEF=0,
+    BT_ANT_TYPE_DUAL,
+    BT_ANT_TYPE_SPLITTER,
+    BT_ANT_TYPE_SWITCH
+} BT_ANT_FRONTEND_CONFIG;
+
+typedef enum {
+    BT_COLOCATED_DEV_BTS4020=0,
+    BT_COLCATED_DEV_CSR ,
+    BT_COLOCATED_DEV_VALKYRIE
+} BT_COLOCATED_DEV_TYPE;
+
+#define BT_SCO_ALLOW_CLOSE_RANGE_OPT    (1 << 0)
+#define BT_SCO_FORCE_AWAKE_OPT          (1 << 1)
+#define BT_SCO_SET_DEFAULT_OVERRIDE(flags)        ((flags) |= (1 << 2))
+#define BT_SCO_GET_DEFAULT_OVERRIDE(flags)        (((flags) >> 2) & 0x1)
 typedef PREPACK struct {
-    A_UINT8 noSCOPkts;
-    A_UINT8 pspollTimeout;
-    A_UINT8 stompbt;
+    A_UINT32 numScoCyclesForceTrigger;  /* Number SCO cycles after which
+                                           force a pspoll. default = 10 */
+    A_UINT32 dataResponseTimeout;       /* Timeout Waiting for Downlink pkt
+                                           in response for ps-poll,
+                                           default = 10 msecs */
+    A_UINT32  stompScoRules;
+    A_UINT32 scoOptFlags;               /* SCO Options Flags :
+                                            bits:     meaning:
+                                             0        Allow Close Range Optimization
+                                             1        Force awake during close range
+                                             2        If set use host supplied threshold
+                                             3        Unused
+                                             4..7     Unused
+                                             8..15    Unused
+                                             16..23   Unused
+                                        */
+    A_UINT32 p2lrpOptModeBound;          /*p2lrp=packetToLowRatePacketRatio. In opt mode
+                                          minimum ratio required to continue in opt mode*/
+    A_UINT32 p2lrpNonOptModeBound;       /*In Non opt mode minimum ratio required to switch
+                                          to opt mode*/
+    A_UINT8 stompDutyCyleVal;           /* Sco cycles to limit ps-poll queuing
+                                           if stomped */
+    A_UINT8 stompDutyCyleMaxVal;        /*firm ware increases stomp duty cycle
+                                          gradually uptill this value on need basis*/
+    A_UINT8 psPollLatencyFraction;      /* Fraction of idle
+                                           period, within which
+                                           additional ps-polls
+                                           can be queued */
+    A_UINT8 noSCOSlots;                 /* Number of SCO Tx/Rx slots.
+                                           HVx, EV3, 2EV3 = 2 */
+    A_UINT8 noIdleSlots;                /* Number of Bluetooth idle slots between
+                                           consecutive SCO Tx/Rx slots
+                                           HVx, EV3 = 4
+                                           2EV3 = 10 */
+    A_UINT8 reserved8;                   /* maintain word algnment*/
 } POSTPACK BT_PARAMS_SCO;
 
+#define BT_A2DP_ALLOW_CLOSE_RANGE_OPT  (1 << 0)
+#define BT_A2DP_FORCE_AWAKE_OPT        (1 << 1)
+#define BT_A2DP_SET_DEFAULT_OVERRIDE(flags)        ((flags) |= (1 << 2))
+#define BT_A2DP_GET_DEFAULT_OVERRIDE(flags)        (((flags) >> 2) & 0x1)
 typedef PREPACK struct {
-    A_UINT32 period;
-    A_UINT32 dutycycle;
-    A_UINT8  stompbt;
-} POSTPACK BT_PARAMS_A2DP;
+    A_UINT32 a2dpWlanUsageLimit; /* MAX time firmware uses the medium for
+                                    wlan, after it identifies the idle time
+                                    default (30 msecs) */
+    A_UINT32 a2dpBurstCntMin;   /* Minimum number of bluetooth data frames
+                                   to replenish Wlan Usage  limit (default 3) */
+    A_UINT32 a2dpDataRespTimeout;
+    A_UINT32 a2dpOptFlags;      /* A2DP Option flags:
+                                       bits:    meaning:
+                                        0       Allow Close Range Optimization
+                                        1       Force awake during close range
+                                        2       If set use host threshold
+                                        3       Unused
+                                        4..7    Unused
+                                        8..15   Unused
+                                        16..23  Unused
+                                 */
+    A_UINT32 p2lrpOptModeBound;    /*p2lrp=packetToLowRatePacketRatio. In opt mode
+                                  minimum ratio required to continue in opt mode*/
+    A_UINT32 p2lrpNonOptModeBound; /*In Non opt mode minimum ratio required to switch
+                                  to opt mode*/
+    A_UINT16 reserved16;          /*maintain word alignment*/
+    A_UINT8 isCoLocatedBtRoleMaster;
+    A_UINT8 reserved8;           /*maintain word alignment*/
+}POSTPACK BT_PARAMS_A2DP;
+
+/* During BT ftp/ BT OPP or any another data based acl profile on bluetooth
+   (non a2dp).*/
+typedef PREPACK struct {
+    A_UINT32 aclWlanMediumUsageTime;  /* Wlan usage time during Acl (non-a2dp)
+                                       coexistence (default 30 msecs) */
+    A_UINT32 aclBtMediumUsageTime;   /* Bt usage time during acl coexistence
+                                       (default 30 msecs)*/
+    A_UINT32 aclDataRespTimeout;
+    A_UINT32 aclDetectTimeout;      /* ACL coexistence enabled if we get
+                                       10 Pkts in X msec(default 100 msecs) */
+    A_UINT32 aclmaxPktCnt;          /* No of ACL pkts to receive before
+                                         enabling ACL coex */
+
+}POSTPACK BT_PARAMS_ACLCOEX;
 
 typedef PREPACK struct {
     A_UINT32 mode;
@@ -966,7 +1194,7 @@ typedef PREPACK struct {
 typedef PREPACK struct {
     PREPACK union {
         WLAN_PROTECT_POLICY_TYPE protectParams;
-        A_UINT16 wlanCtrlFlags;
+        A_UINT16 configCtrlFlags;
     } POSTPACK info;
     A_UINT8 paramType;
 } POSTPACK BT_PARAMS_MISC;
@@ -975,11 +1203,28 @@ typedef PREPACK struct {
     PREPACK union {
         BT_PARAMS_SCO scoParams;
         BT_PARAMS_A2DP a2dpParams;
-        BT_PARAMS_MISC miscParams;
-        BT_COEX_REGS regs;
+        BT_PARAMS_ACLCOEX  aclCoexParams;
+        A_UINT8 antType;         /* 0 -Disabled (default)
+                                     1 - BT_ANT_TYPE_DUAL
+                                     2 - BT_ANT_TYPE_SPLITTER
+                                     3 - BT_ANT_TYPE_SWITCH */
+        A_UINT8 coLocatedBtDev;  /* 0 - BT_COLOCATED_DEV_BTS4020 (default)
+                                     1 - BT_COLCATED_DEV_CSR
+                                     2 - BT_COLOCATED_DEV_VALKYRIe
+                                   */
     } POSTPACK info;
-    A_UINT8 paramType;
+    A_UINT8 paramType ;
 } POSTPACK WMI_SET_BT_PARAMS_CMD;
+
+typedef enum {
+    DISCONN_EVT_IN_RECONN = 0,  /* default */
+    NO_DISCONN_EVT_IN_RECONN
+} TARGET_EVENT_REPORT_CONFIG;
+
+typedef PREPACK struct {
+    A_UINT32 evtConfig;
+} POSTPACK WMI_SET_TARGET_EVENT_REPORT_CMD;
+
 
 /*
  * Command Replies
@@ -1003,6 +1248,22 @@ typedef enum {
     A_FAILED_CREATE_REMOVE_PSTREAM_FIRST = 254,
 } PSTREAM_REPLY_STATUS;
 
+typedef PREPACK struct {
+    A_UINT8     status;                 /* PSTREAM_REPLY_STATUS */
+    A_UINT8     txQueueNumber;
+    A_UINT8     rxQueueNumber;
+    A_UINT8     trafficClass;
+    A_UINT8     trafficDirection;       /* DIR_TYPE */
+} POSTPACK WMI_CRE_PRIORITY_STREAM_REPLY;
+
+typedef PREPACK struct {
+    A_UINT8     status;                 /* PSTREAM_REPLY_STATUS */
+    A_UINT8     txQueueNumber;
+    A_UINT8     rxQueueNumber;
+    A_UINT8     trafficDirection;       /* DIR_TYPE */
+    A_UINT8     trafficClass;
+} POSTPACK WMI_DEL_PRIORITY_STREAM_REPLY;
+
 /*
  * List of Events (target to host)
  */
@@ -1016,7 +1277,7 @@ typedef enum {
     WMI_PSTREAM_TIMEOUT_EVENTID,
     WMI_NEIGHBOR_REPORT_EVENTID,
     WMI_TKIP_MICERR_EVENTID,
-    WMI_SCAN_COMPLETE_EVENTID,
+    WMI_SCAN_COMPLETE_EVENTID,           /* 0x100a */
     WMI_REPORT_STATISTICS_EVENTID,
     WMI_RSSI_THRESHOLD_EVENTID,
     WMI_ERROR_REPORT_EVENTID,
@@ -1026,12 +1287,18 @@ typedef enum {
     WMI_CAC_EVENTID,
     WMI_SNR_THRESHOLD_EVENTID,
     WMI_LQ_THRESHOLD_EVENTID,
-    WMI_TX_RETRY_ERR_EVENTID,
+    WMI_TX_RETRY_ERR_EVENTID,            /* 0x1014 */
     WMI_REPORT_ROAM_DATA_EVENTID,
     WMI_TEST_EVENTID,
     WMI_APLIST_EVENTID,
     WMI_GET_WOW_LIST_EVENTID,
-    WMI_GET_PMKID_LIST_EVENTID
+    WMI_GET_PMKID_LIST_EVENTID,
+    WMI_CHANNEL_CHANGE_EVENTID,
+    WMI_PEER_NODE_EVENTID,
+    WMI_PSPOLL_EVENTID,
+    WMI_DTIMEXPIRY_EVENTID,
+    WMI_WLAN_VERSION_EVENTID,
+    WMI_SET_PARAMS_REPLY_EVENTID
 } WMI_EVENT_ID;
 
 typedef enum {
@@ -1043,7 +1310,24 @@ typedef enum {
 typedef PREPACK struct {
     A_UINT8     macaddr[ATH_MAC_LEN];
     A_UINT8     phyCapability;              /* WMI_PHY_CAPABILITY */
-} POSTPACK WMI_READY_EVENT;
+} POSTPACK WMI_READY_EVENT_1;
+
+typedef PREPACK struct {
+    A_UINT32    version;
+    A_UINT8     macaddr[ATH_MAC_LEN];
+    A_UINT8     phyCapability;              /* WMI_PHY_CAPABILITY */
+} POSTPACK WMI_READY_EVENT_2;
+
+#if defined(ATH_TARGET)
+#ifdef AR6002_REV2
+#define WMI_READY_EVENT WMI_READY_EVENT_1  /* AR6002_REV2 target code */
+#else
+#define WMI_READY_EVENT WMI_READY_EVENT_2  /* AR6002_REV4 and AR6001 */
+#endif
+#else
+#define WMI_READY_EVENT WMI_READY_EVENT_2 /* host code */
+#endif
+
 
 /*
  * Connect Event
@@ -1074,6 +1358,8 @@ typedef enum {
     CSERV_DISCONNECT   = 0x08,
     INVALID_PROFILE    = 0x0a,
     DOT11H_CHANNEL_SWITCH = 0x0b,
+    PROFILE_MISMATCH        = 0x0c,
+    PYXIS_VIRT_ADHOC_DISC   = 0x0d,
 } WMI_DISCONNECT_REASON;
 
 typedef PREPACK struct {
@@ -1094,6 +1380,7 @@ typedef enum {
     BEACON_FTYPE = 0x1,
     PROBERESP_FTYPE,
     ACTION_MGMT_FTYPE,
+    PROBEREQ_FTYPE,
 } WMI_BI_FTYPE;
 
 enum {
@@ -1132,6 +1419,9 @@ typedef PREPACK struct {
 } POSTPACK WMI_REG_DOMAIN_EVENT;
 
 typedef PREPACK struct {
+    A_UINT8     txQueueNumber;
+    A_UINT8     rxQueueNumber;
+    A_UINT8     trafficDirection;
     A_UINT8     trafficClass;
 } POSTPACK WMI_PSTREAM_TIMEOUT_EVENT;
 
@@ -1172,7 +1462,7 @@ typedef PREPACK struct {
  * WMI_SCAN_COMPLETE_EVENTID - no parameters (old), staus parameter (new)
  */
 typedef PREPACK struct {
-    A_STATUS status;
+    A_INT32 status;
 } POSTPACK WMI_SCAN_COMPLETE_EVENT;
 
 #define MAX_OPT_DATA_LEN 1400
@@ -1190,6 +1480,8 @@ typedef PREPACK struct {
 typedef enum {
     SPECIAL_OFF,
     SPECIAL_ON,
+    PYXIS_ADHOC_ON,
+    PYXIS_ADHOC_OFF,
 } OPT_MODE_TYPE;
 
 typedef PREPACK struct {
@@ -1248,6 +1540,7 @@ typedef PREPACK struct {
     A_UINT32   tx_errors;
     A_UINT32   tx_failed_cnt;
     A_UINT32   tx_retry_cnt;
+    A_UINT32   tx_mult_retry_cnt;
     A_UINT32   tx_rts_fail_cnt;
     A_INT32    tx_unicast_rate;
 }POSTPACK tx_stats_t;
@@ -1291,7 +1584,7 @@ typedef PREPACK struct {
     A_UINT16    cs_disconnect_cnt;
     A_INT16     cs_aveBeacon_rssi;
     A_UINT16    cs_roam_count;
-    A_UINT16    cs_rssi;
+    A_INT16     cs_rssi;
     A_UINT8     cs_snr;
     A_UINT8     cs_aveBeacon_snr;
     A_UINT8     cs_lastRoam_msec;
@@ -1302,6 +1595,12 @@ typedef PREPACK struct {
     rx_stats_t          rx_stats;
     tkip_ccmp_stats_t   tkipCcmpStats;
 }POSTPACK wlan_net_stats_t;
+
+typedef PREPACK struct {
+    A_UINT32    arp_received;
+    A_UINT32    arp_matched;
+    A_UINT32    arp_replied;
+} POSTPACK arp_stats_t;
 
 typedef PREPACK struct {
     A_UINT32    wow_num_pkts_dropped;
@@ -1316,6 +1615,7 @@ typedef PREPACK struct {
     pm_stats_t          pmStats;
     wlan_net_stats_t    txrxStats;
     wlan_wow_stats_t    wowStats;
+    arp_stats_t         arpStats;
     cserv_stats_t       cservStats;
 } POSTPACK WMI_TARGET_STATS;
 
@@ -1488,7 +1788,15 @@ typedef enum {
 
 typedef PREPACK struct {
     A_INT8      rateIndex;          /* see WMI_BIT_RATE */
-} POSTPACK WMI_BIT_RATE_CMD, WMI_BIT_RATE_REPLY;
+    A_INT8      mgmtRateIndex;
+    A_INT8      ctlRateIndex;
+} POSTPACK WMI_BIT_RATE_CMD;
+
+
+typedef PREPACK struct {
+    A_INT8      rateIndex;          /* see WMI_BIT_RATE */
+} POSTPACK  WMI_BIT_RATE_REPLY;
+
 
 /*
  * WMI_SET_FIXRATES_CMDID
@@ -1513,6 +1821,12 @@ typedef enum {
 typedef PREPACK struct {
     A_UINT16      fixRateMask;          /* see WMI_BIT_RATE */
 } POSTPACK WMI_FIX_RATES_CMD, WMI_FIX_RATES_REPLY;
+
+typedef PREPACK struct {
+    A_UINT8        bEnableMask;
+    A_UINT8        frameType;               /*type and subtype*/
+    A_UINT16      frameRateMask;          /* see WMI_BIT_RATE */
+} POSTPACK WMI_FRAME_RATES_CMD, WMI_FRAME_RATES_REPLY;
 
 /*
  * WMI_SET_RECONNECT_AUTH_MODE_CMDID
@@ -1596,7 +1910,7 @@ typedef PREPACK struct {
 /*
  * Add Application specified IE to a management frame
  */
-#define WMI_MAX_IE_LEN  78
+#define WMI_MAX_IE_LEN  255
 
 typedef PREPACK struct {
     A_UINT8 mgmtFrmType;  /* one of WMI_MGMT_FRAME_TYPE */
@@ -1630,6 +1944,8 @@ typedef PREPACK struct {
 #define WOW_PATTERN_SIZE 64
 #define WOW_MASK_SIZE 64
 
+#define MAC_MAX_FILTERS_PER_LIST 4
+
 typedef PREPACK struct {
     A_UINT8 wow_valid_filter;
     A_UINT8 wow_filter_id;
@@ -1647,6 +1963,22 @@ typedef PREPACK struct {
     A_UINT8 wow_total_list_size;
     WOW_FILTER list[WOW_MAX_FILTERS_PER_LIST];
 } POSTPACK WOW_FILTER_LIST;
+
+typedef PREPACK struct {
+    A_UINT8 valid_filter;
+    A_UINT8 mac_addr[ATH_MAC_LEN];
+} POSTPACK MAC_FILTER;
+
+
+typedef PREPACK struct {
+    A_UINT8 total_list_size;
+    MAC_FILTER list[MAC_MAX_FILTERS_PER_LIST];
+} POSTPACK MAC_FILTER_LIST;
+
+#define MAX_IP_ADDRS  2
+typedef PREPACK struct {
+    A_UINT32 ips[MAX_IP_ADDRS];  /* IP in Network Byte Order */
+} POSTPACK WMI_SET_IP_CMD;
 
 typedef PREPACK struct {
     A_BOOL awake;
@@ -1718,19 +2050,218 @@ typedef PREPACK struct {
  */
 typedef PREPACK struct {
     A_UINT32    numPMKID;
+    A_UINT8     bssidList[ATH_MAC_LEN][1];
     WMI_PMKID   pmkidList[1];
 } POSTPACK WMI_PMKID_LIST_REPLY;
 
-/* index used for priority streams */
+typedef PREPACK struct {
+    A_UINT16 oldChannel;
+    A_UINT32 newChannel;
+} POSTPACK WMI_CHANNEL_CHANGE_EVENT;
+
+typedef PREPACK struct {
+    A_UINT32 version;
+} POSTPACK WMI_WLAN_VERSION_EVENT;
+
+#define PEER_NODE_JOIN_EVENT 0x00
+#define PEER_NODE_LEAVE_EVENT 0x01
+#define PEER_FIRST_NODE_JOIN_EVENT 0x10
+#define PEER_LAST_NODE_LEAVE_EVENT 0x11
+typedef PREPACK struct {
+    A_UINT8 eventCode;
+    A_UINT8 peerMacAddr[ATH_MAC_LEN];
+} POSTPACK WMI_PEER_NODE_EVENT;
+
+#define IEEE80211_FRAME_TYPE_MGT          0x00
+#define IEEE80211_FRAME_TYPE_CTL          0x04
+
+
 typedef enum {
-    WMI_NOT_MAPPED  = -1,
-    WMI_CONTROL_PRI = 0,
-    WMI_BEST_EFFORT_PRI = 1,
-    WMI_LOW_PRI = 2,
-    WMI_HIGH_PRI = 3,
-    WMI_HIGHEST_PRI,
-    WMI_PRI_MAX_COUNT
-} WMI_PRI_STREAM_ID;
+    WMI_PYXIS_GEN_PARAMS = 0,
+    WMI_PYXIS_DSCVR_PARAMS,
+    WMI_PYXIS_SET_TX_MODE,
+} WMI_PYXIS_CONFIG_TYPE;
+
+typedef PREPACK struct {
+    A_UINT16   pyxisConfigType;  // One of WMI_PYXIS_CONFIG_TYPE
+    A_UINT16   pyxisConfigLen;   // Length in Bytes of Information that follows
+} POSTPACK WMI_PYXIS_CONFIG_HDR;
+
+typedef PREPACK struct {
+    WMI_PYXIS_CONFIG_HDR        hdr;
+    A_UINT32                    dscvrWindow;
+    A_UINT32                    dscvrInterval;
+    A_UINT32                    dscvrLife;
+    A_UINT32                    probeInterval;
+    A_UINT32                    probePeriod;
+    A_UINT16                    dscvrChannel;
+} POSTPACK WMI_PYXIS_DSCVR_CONFIG;
+
+typedef PREPACK struct {
+    WMI_PYXIS_CONFIG_HDR        hdr;
+    A_UINT32                    dataWindowSizeMin;
+    A_UINT32                    dataWindowSizeMax;
+    A_UINT8                     maxJoiners;
+} POSTPACK WMI_PYXIS_GEN_CONFIG;
+
+typedef PREPACK struct {
+    WMI_PYXIS_CONFIG_HDR        hdr;
+    A_BOOL                      mode;
+} POSTPACK WMI_PYXIS_TX_MODE;
+
+typedef enum {
+    WMI_PYXIS_DISC_PEER = 0,
+    WMI_PYXIS_JOIN_PEER,
+} WMI_PYXIS_CMD_TYPE;
+
+typedef PREPACK struct {
+    A_UINT16  pyxisCmd;
+    A_UINT16  pyxisCmdLen;  // Length following this header
+} POSTPACK WMI_PYXIS_CMD_HDR;
+
+typedef PREPACK struct {
+    WMI_PYXIS_CMD_HDR   hdr;
+    A_UINT8    peerMacAddr[ATH_MAC_LEN];
+} POSTPACK WMI_PYXIS_DISCONNECT_CMD;
+
+typedef PREPACK struct {
+    WMI_PYXIS_CMD_HDR hdr;
+    A_UINT32    ctrl_flags;             /* One of the Bits determines if it
+                                         * is Virt Adhoc/the device is to
+                                         * join a BSS */
+    A_UINT16    channel;                /* Data Channel */
+    A_UINT8     networkType;            /* network type */
+    A_UINT8     dot11AuthMode;          /* OPEN_AUTH */
+    A_UINT8     authMode;               /* NONE_AUTH */
+    A_UINT8     pairwiseCryptoType;     /* One of NONE_CRYPT, AES_CRYPT */
+    A_UINT8     pairwiseCryptoLen;      /* 0 since ADD_KEY passes the length */
+    A_UINT8     groupCryptoType;        /* One of NONE_CRYPT, AES_CRYPT */
+    A_UINT8     groupCryptoLen;         /* 0 since ADD_KEY passes the length */
+    A_UINT8     peerMacAddr[ATH_MAC_LEN];  /* BSSID of peer network*/
+    A_UINT8     nwBSSID[ATH_MAC_LEN];     /* BSSID of the Pyxis Adhoc Network */
+} POSTPACK WMI_PYXIS_JOIN_CMD;
+
+typedef PREPACK struct {
+    WMI_PYXIS_CMD_HDR   hdr;
+    A_BOOL      mode;
+} POSTPACK WMI_PYXIS_SET_TX_MODE_CMD;
+
+/*
+ * ------- AP Mode definitions --------------
+ */
+
+/*
+ * !!! Warning !!!
+ * -Changing the following values needs compilation of both driver and firmware
+ */
+#define AP_MAX_NUM_STA          8
+#define AP_ACL_SIZE             10
+#define IEEE80211_MAX_IE        256
+#define MCAST_AID               0xFF /* Spl. AID used to set DTIM flag in the beacons */
+#define DEF_AP_COUNTRY_CODE     "US "
+#define DEF_AP_WMODE_G          WMI_11G_MODE
+#define DEF_AP_WMODE_AG         WMI_11AG_MODE
+#define DEF_AP_DTIM             5
+#define DEF_BEACON_INTERVAL     100
+
+/* AP mode disconnect reasons */
+#define AP_DISCONNECT_STA_LEFT      101
+#define AP_DISCONNECT_FROM_HOST     102
+#define AP_DISCONNECT_COMM_TIMEOUT  103
+
+/*
+ * Used with WMI_AP_HIDDEN_SSID_CMDID
+ */
+#define HIDDEN_SSID_FALSE   0
+#define HIDDEN_SSID_TRUE    1
+typedef PREPACK struct {
+    A_UINT8     hidden_ssid;
+} POSTPACK WMI_AP_HIDDEN_SSID_CMD;
+
+/*
+ * Used with WMI_AP_ACL_POLICY_CMDID
+ */
+#define AP_ACL_DISABLE          0x00
+#define AP_ACL_ALLOW_MAC        0x01
+#define AP_ACL_DENY_MAC         0x02
+#define AP_ACL_RETAIN_LIST_MASK 0x80
+typedef PREPACK struct {
+    A_UINT8     policy;
+} POSTPACK WMI_AP_ACL_POLICY_CMD;
+
+/*
+ * Used with WMI_AP_ACL_MAC_LIST_CMDID
+ */
+#define ADD_MAC_ADDR    1
+#define DEL_MAC_ADDR    2
+typedef PREPACK struct {
+    A_UINT8     action;
+    A_UINT8     index;
+    A_UINT8     mac[ATH_MAC_LEN];
+    A_UINT8     wildcard;
+} POSTPACK WMI_AP_ACL_MAC_CMD;
+
+typedef PREPACK struct {
+    A_UINT16    index;
+    A_UINT8     acl_mac[AP_ACL_SIZE][ATH_MAC_LEN];
+    A_UINT8     wildcard[AP_ACL_SIZE];
+    A_UINT8     policy;
+} POSTPACK WMI_AP_ACL;
+
+/*
+ * Used with WMI_AP_SET_NUM_STA_CMDID
+ */
+typedef PREPACK struct {
+    A_UINT8     num_sta;
+} POSTPACK WMI_AP_SET_NUM_STA_CMD;
+
+/*
+ * Used with WMI_AP_SET_MLME_CMDID
+ */
+typedef PREPACK struct {
+    A_UINT8    mac[ATH_MAC_LEN];
+    A_UINT16   reason;              /* 802.11 reason code */
+    A_UINT8    cmd;                 /* operation to perform */
+#define WMI_AP_MLME_ASSOC       1   /* associate station */
+#define WMI_AP_DISASSOC         2   /* disassociate station */
+#define WMI_AP_DEAUTH           3   /* deauthenticate station */
+#define WMI_AP_MLME_AUTHORIZE   4   /* authorize station */
+#define WMI_AP_MLME_UNAUTHORIZE 5   /* unauthorize station */
+} POSTPACK WMI_AP_SET_MLME_CMD;
+
+typedef PREPACK struct {
+    A_UINT32 period;
+} POSTPACK WMI_AP_CONN_INACT_CMD;
+
+typedef PREPACK struct {
+    A_UINT32 period_min;
+    A_UINT32 dwell_ms;
+} POSTPACK WMI_AP_PROT_SCAN_TIME_CMD;
+
+typedef PREPACK struct {
+    A_BOOL flag;
+    A_UINT16 aid;
+} POSTPACK WMI_AP_SET_PVB_CMD;
+
+#define WMI_DISABLE_REGULATORY_CODE "FF"
+
+typedef PREPACK struct {
+    A_UCHAR countryCode[3];
+} POSTPACK WMI_AP_SET_COUNTRY_CMD;
+
+typedef PREPACK struct {
+    A_UINT8 dtim;
+} POSTPACK WMI_AP_SET_DTIM_CMD;
+
+/* AP mode events */
+/* WMI_PS_POLL_EVENT */
+typedef PREPACK struct {
+    A_UINT16 aid;
+} POSTPACK WMI_PSPOLL_EVENT;
+
+/*
+ * End of AP mode definitions
+ */
 
 #ifndef ATH_TARGET
 #include "athendpack.h"

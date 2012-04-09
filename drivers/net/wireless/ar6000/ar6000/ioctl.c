@@ -1,32 +1,39 @@
 /*
  *
- * Copyright (c) 2004-2007 Atheros Communications Inc.
+ * Copyright (c) 2004-2009 Atheros Communications Inc.
  * All rights reserved.
  *
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  published by the Free Software Foundation;
- *
- *  Software distributed under the License is distributed on an "AS
- *  IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
- *  implied. See the License for the specific language governing
- *  rights and limitations under the License.
- *
- *
+ * 
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License version 2 as
+// published by the Free Software Foundation;
+//
+// Software distributed under the License is distributed on an "AS
+// IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// rights and limitations under the License.
+//
+//
  *
  */
 
 #include "ar6000_drv.h"
+#include "ieee80211_ioctl.h"
+#include "ar6kap_common.h"
 
 static A_UINT8 bcast_mac[] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 static A_UINT8 null_mac[] = {0x0, 0x0, 0x0, 0x0, 0x0, 0x0};
-extern USER_RSSI_THOLD rssi_map[12];
 extern unsigned int wmitimeout;
 extern A_WAITQUEUE_HEAD arEvent;
 extern int tspecCompliance;
 extern int bmienable;
 extern int bypasswmi;
+
+/* ATHENV */
+#ifdef ANDROID_ENV
+extern int chan_num;
+#endif
+/* ATHENV */
 
 static int
 ar6000_ioctl_get_roam_tbl(struct net_device *dev, struct ifreq *rq)
@@ -215,6 +222,44 @@ ar6000_ioctl_get_rd(struct net_device *dev, struct ifreq *rq)
     return ret;
 }
 
+static int
+ar6000_ioctl_set_country(struct net_device *dev, struct ifreq *rq)
+{
+    AR_SOFTC_T *ar = (AR_SOFTC_T *)netdev_priv(dev);
+    WMI_AP_SET_COUNTRY_CMD cmd;
+    A_STATUS ret;
+
+    if ((dev->flags & IFF_UP) != IFF_UP) {
+        return -EIO;
+    }
+    if (ar->arWmiReady == FALSE) {
+        return -EIO;
+    }
+
+    if (copy_from_user(&cmd, (char *)((unsigned int*)rq->ifr_data + 1),
+                                sizeof(cmd)))
+    {
+        return -EFAULT;
+    }
+
+    ar->ap_profile_flag = 1; /* There is a change in profile */
+
+    ret = wmi_set_country(ar->arWmi, cmd.countryCode);
+    A_MEMCPY(ar->ap_country_code, cmd.countryCode, 3);
+
+    switch (ret) {
+        case A_OK:
+            return 0;
+        case A_EBUSY :
+            return -EBUSY;
+        case A_NO_MEMORY:
+            return -ENOMEM;
+        case A_EINVAL:
+        default:
+            return -EFAULT;
+    }
+}
+
 
 /* Get power mode command */
 static int
@@ -253,6 +298,20 @@ ar6000_ioctl_set_channelParams(struct net_device *dev, struct ifreq *rq)
         return -EFAULT;
     }
 
+    if( (ar->arNextMode == AP_NETWORK) && (cmd.numChannels || cmd.scanParam) ) {
+        A_PRINTF("ERROR: Only wmode is allowed in AP mode\n");
+        return -EIO;
+    }
+
+/* ATHENV */
+#ifdef ANDROID_ENV
+    if ((ar->arNextMode != AP_NETWORK) && (cmd.numChannels == chan_num)) {
+        AR_DEBUG_PRINTF("AR6000: configure to the same channel number [0x%x]\n", cmd.numChannels);
+        return 0;
+    }
+#endif
+/* ATHENV */
+
     if (cmd.numChannels > 1) {
         cmdp = A_MALLOC(130);
         if (copy_from_user(cmdp, rq->ifr_data,
@@ -272,6 +331,20 @@ ar6000_ioctl_set_channelParams(struct net_device *dev, struct ifreq *rq)
         ret = -EINVAL;
     }
 
+/* ATHENV */
+#ifdef ANDROID_ENV
+    AR6000_SPIN_LOCK(&ar->arLock, 0);
+    if (!ret && (ar->arConnected == TRUE || ar->arConnectPending == TRUE)) {
+        AR6000_SPIN_UNLOCK(&ar->arLock, 0);
+        if (ar->arNextMode != AP_NETWORK)
+            wmi_disconnect_cmd(ar->arWmi);
+    } else {
+        AR6000_SPIN_UNLOCK(&ar->arLock, 0);
+    }
+    wmi_free_allnodes(ar->arWmi);
+#endif
+/* ATHENV */
+
     if (!ret &&
         (wmi_set_channelParams_cmd(ar->arWmi, cmdp->scanParam, cmdp->phyMode,
                                    cmdp->numChannels, cmdp->channelList)
@@ -279,13 +352,24 @@ ar6000_ioctl_set_channelParams(struct net_device *dev, struct ifreq *rq)
     {
         ret = -EIO;
     }
+/* ATHENV */
+#ifdef ANDROID_ENV
+    else
+        chan_num = cmdp->numChannels;
+#endif
+/* ATHENV */
 
     if (cmd.numChannels > 1) {
         kfree(cmdp);
     }
 
+    ar->ap_wmode = cmdp->phyMode;
+    /* Set the profile change flag to allow a commit cmd */
+    ar->ap_profile_flag = 1;
+
     return ret;
 }
+
 
 static int
 ar6000_ioctl_set_snr_threshold(struct net_device *dev, struct ifreq *rq)
@@ -327,7 +411,6 @@ ar6000_ioctl_set_rssi_threshold(struct net_device *dev, struct ifreq *rq)
     WMI_RSSI_THRESHOLD_PARAMS_CMD cmd;
     USER_RSSI_PARAMS rssiParams;
     A_INT32 i, j;
-
     int ret = 0;
 
     if (ar->arWmiReady == FALSE) {
@@ -340,24 +423,24 @@ ar6000_ioctl_set_rssi_threshold(struct net_device *dev, struct ifreq *rq)
     cmd.weight = rssiParams.weight;
     cmd.pollTime = rssiParams.pollTime;
 
-    A_MEMCPY(rssi_map, &rssiParams.tholds, sizeof(rssi_map));
+    A_MEMCPY(ar->rssi_map, &rssiParams.tholds, sizeof(ar->rssi_map));
     /*
      *  only 6 elements, so use bubble sorting, in ascending order
      */
     for (i = 5; i > 0; i--) {
         for (j = 0; j < i; j++) { /* above tholds */
-            if (rssi_map[j+1].rssi < rssi_map[j].rssi) {
-                SWAP_THOLD(rssi_map[j+1], rssi_map[j]);
-            } else if (rssi_map[j+1].rssi == rssi_map[j].rssi) {
+            if (ar->rssi_map[j+1].rssi < ar->rssi_map[j].rssi) {
+                SWAP_THOLD(ar->rssi_map[j+1], ar->rssi_map[j]);
+            } else if (ar->rssi_map[j+1].rssi == ar->rssi_map[j].rssi) {
                 return EFAULT;
             }
         }
     }
     for (i = 11; i > 6; i--) {
         for (j = 6; j < i; j++) { /* below tholds */
-            if (rssi_map[j+1].rssi < rssi_map[j].rssi) {
-                SWAP_THOLD(rssi_map[j+1], rssi_map[j]);
-            } else if (rssi_map[j+1].rssi == rssi_map[j].rssi) {
+            if (ar->rssi_map[j+1].rssi < ar->rssi_map[j].rssi) {
+                SWAP_THOLD(ar->rssi_map[j+1], ar->rssi_map[j]);
+            } else if (ar->rssi_map[j+1].rssi == ar->rssi_map[j].rssi) {
                 return EFAULT;
             }
         }
@@ -366,21 +449,21 @@ ar6000_ioctl_set_rssi_threshold(struct net_device *dev, struct ifreq *rq)
 #ifdef DEBUG
     for (i = 0; i < 12; i++) {
         AR_DEBUG2_PRINTF("thold[%d].tag: %d, thold[%d].rssi: %d \n",
-                i, rssi_map[i].tag, i, rssi_map[i].rssi);
+                i, ar->rssi_map[i].tag, i, ar->rssi_map[i].rssi);
     }
 #endif
-    cmd.thresholdAbove1_Val = rssi_map[0].rssi;
-    cmd.thresholdAbove2_Val = rssi_map[1].rssi;
-    cmd.thresholdAbove3_Val = rssi_map[2].rssi;
-    cmd.thresholdAbove4_Val = rssi_map[3].rssi;
-    cmd.thresholdAbove5_Val = rssi_map[4].rssi;
-    cmd.thresholdAbove6_Val = rssi_map[5].rssi;
-    cmd.thresholdBelow1_Val = rssi_map[6].rssi;
-    cmd.thresholdBelow2_Val = rssi_map[7].rssi;
-    cmd.thresholdBelow3_Val = rssi_map[8].rssi;
-    cmd.thresholdBelow4_Val = rssi_map[9].rssi;
-    cmd.thresholdBelow5_Val = rssi_map[10].rssi;
-    cmd.thresholdBelow6_Val = rssi_map[11].rssi;
+    cmd.thresholdAbove1_Val = ar->rssi_map[0].rssi;
+    cmd.thresholdAbove2_Val = ar->rssi_map[1].rssi;
+    cmd.thresholdAbove3_Val = ar->rssi_map[2].rssi;
+    cmd.thresholdAbove4_Val = ar->rssi_map[3].rssi;
+    cmd.thresholdAbove5_Val = ar->rssi_map[4].rssi;
+    cmd.thresholdAbove6_Val = ar->rssi_map[5].rssi;
+    cmd.thresholdBelow1_Val = ar->rssi_map[6].rssi;
+    cmd.thresholdBelow2_Val = ar->rssi_map[7].rssi;
+    cmd.thresholdBelow3_Val = ar->rssi_map[8].rssi;
+    cmd.thresholdBelow4_Val = ar->rssi_map[9].rssi;
+    cmd.thresholdBelow5_Val = ar->rssi_map[10].rssi;
+    cmd.thresholdBelow6_Val = ar->rssi_map[11].rssi;
 
     if( wmi_set_rssi_threshold_params(ar->arWmi, &cmd) != A_OK ) {
         ret = -EIO;
@@ -568,8 +651,12 @@ ar6000_ioctl_tcmd_get_rx_report(struct net_device *dev,
                                  struct ifreq *rq, A_UINT8 *data, A_UINT32 len)
 {
     AR_SOFTC_T *ar = (AR_SOFTC_T *)netdev_priv(dev);
-    A_UINT32    buf[2];
+    A_UINT32    buf[4];
     int ret = 0;
+
+    if (ar->bIsDestroyProgress) {
+        return -EBUSY;
+    }
 
     if (ar->arWmiReady == FALSE) {
         return -EIO;
@@ -578,6 +665,12 @@ ar6000_ioctl_tcmd_get_rx_report(struct net_device *dev,
     if (down_interruptible(&ar->arSem)) {
         return -ERESTARTSYS;
     }
+
+    if (ar->bIsDestroyProgress) {
+        up(&ar->arSem);
+        return -EBUSY;
+    }
+
     ar->tcmdRxReport = 0;
     if (wmi_test_cmd(ar->arWmi, data, len) != A_OK) {
         up(&ar->arSem);
@@ -592,6 +685,8 @@ ar6000_ioctl_tcmd_get_rx_report(struct net_device *dev,
 
     buf[0] = ar->tcmdRxTotalPkt;
     buf[1] = ar->tcmdRxRssi;
+    buf[2] = ar->tcmdRxcrcErrPkt;
+    buf[3] = ar->tcmdRxsecErrPkt;
     if (!ret && copy_to_user(rq->ifr_data, buf, sizeof(buf))) {
         ret = -EFAULT;
     }
@@ -609,6 +704,8 @@ ar6000_tcmd_rx_report_event(void *devt, A_UINT8 * results, int len)
 
     ar->tcmdRxTotalPkt = rx_rep->u.report.totalPkt;
     ar->tcmdRxRssi = rx_rep->u.report.rssiInDBm;
+    ar->tcmdRxcrcErrPkt = rx_rep->u.report.crcErrPkt;
+    ar->tcmdRxsecErrPkt = rx_rep->u.report.secErrPkt;
     ar->tcmdRxReport = 1;
 
     wake_up(&arEvent);
@@ -659,6 +756,9 @@ ar6000_ioctl_get_target_stats(struct net_device *dev, struct ifreq *rq)
     TARGET_STATS *pStats = &ar->arTargetStats;
     int ret = 0;
 
+    if (ar->bIsDestroyProgress) {
+        return -EBUSY;
+    }
     if (ar->arWmiReady == FALSE) {
         return -EIO;
     }
@@ -667,6 +767,10 @@ ar6000_ioctl_get_target_stats(struct net_device *dev, struct ifreq *rq)
     }
     if (down_interruptible(&ar->arSem)) {
         return -ERESTARTSYS;
+    }
+    if (ar->bIsDestroyProgress) {
+        up(&ar->arSem);
+        return -EBUSY;
     }
 
     ar->statsUpdatePending = TRUE;
@@ -959,11 +1063,239 @@ ar6000_gpio_intr_ack(struct net_device *dev,
 }
 #endif /* CONFIG_HOST_GPIO_SUPPORT */
 
+#if defined(CONFIG_TARGET_PROFILE_SUPPORT)
+static struct prof_count_s prof_count_results;
+static A_BOOL prof_count_available; /* Requested GPIO data available */
+
+static A_STATUS
+prof_count_get(struct net_device *dev)
+{
+    AR_SOFTC_T *ar = (AR_SOFTC_T *)netdev_priv(dev);
+
+    *((volatile A_BOOL *)&prof_count_available) = FALSE;
+    return wmi_prof_count_get_cmd(ar->arWmi);
+}
+
+/*
+ * This is called when a response is received from the Target
+ * for a previous prof_count_get call.
+ */
+void
+prof_count_rx(A_UINT32 addr, A_UINT32 count)
+{
+    prof_count_results.addr = addr;
+    prof_count_results.count = count;
+    *((volatile A_BOOL *)&prof_count_available) = TRUE;
+    wake_up(&arEvent);
+}
+#endif /* CONFIG_TARGET_PROFILE_SUPPORT */
+
+int
+ar6000_ioctl_setparam(AR_SOFTC_T *ar, int param, int value)
+{
+    A_BOOL profChanged = FALSE;
+    int ret=0;
+
+    switch (param) {
+        case IEEE80211_PARAM_WPA:
+            switch (value) {
+                case WPA_MODE_WPA1:
+                    ar->arAuthMode = WPA_AUTH;
+                    profChanged    = TRUE;
+                    break;
+                case WPA_MODE_WPA2:
+                    ar->arAuthMode = WPA2_AUTH;
+                    profChanged    = TRUE;
+                    break;
+                case WPA_MODE_NONE:
+                    ar->arAuthMode = NONE_AUTH;
+                    profChanged    = TRUE;
+                    break;
+            }
+            break;
+        case IEEE80211_PARAM_AUTHMODE:
+            switch(value) {
+                case IEEE80211_AUTH_WPA_PSK:
+                    if (WPA_AUTH == ar->arAuthMode) {
+                        ar->arAuthMode = WPA_PSK_AUTH;
+                        profChanged    = TRUE;
+                    } else if (WPA2_AUTH == ar->arAuthMode) {
+                        ar->arAuthMode = WPA2_PSK_AUTH;
+                        profChanged    = TRUE;
+                    } else {
+                        AR_DEBUG_PRINTF("Error -  Setting PSK "\
+                            "mode when WPA param was set to %d\n",
+                            ar->arAuthMode);
+                        ret = -EIO;
+                    }
+                    break;
+                case IEEE80211_AUTH_WPA_CCKM:
+                    if (WPA2_AUTH == ar->arAuthMode) {
+                        ar->arAuthMode = WPA2_AUTH_CCKM;
+                    } else {
+                        ar->arAuthMode = WPA_AUTH_CCKM;
+                    }
+                    break;
+                default:
+                    break;
+            }
+            break;
+        case IEEE80211_PARAM_UCASTCIPHER:
+            switch (value) {
+                case IEEE80211_CIPHER_AES_CCM:
+                    ar->arPairwiseCrypto = AES_CRYPT;
+                    profChanged          = TRUE;
+                    break;
+                case IEEE80211_CIPHER_TKIP:
+                    ar->arPairwiseCrypto = TKIP_CRYPT;
+                    profChanged          = TRUE;
+                    break;
+                case IEEE80211_CIPHER_WEP:
+                    ar->arPairwiseCrypto = WEP_CRYPT;
+                    profChanged          = TRUE;
+                    break;
+                case IEEE80211_CIPHER_NONE:
+                    ar->arPairwiseCrypto = NONE_CRYPT;
+                    profChanged          = TRUE;
+                    break;
+            }
+            break;
+        case IEEE80211_PARAM_UCASTKEYLEN:
+            if (!IEEE80211_IS_VALID_WEP_CIPHER_LEN(value)) {
+                ret = -EIO;
+            } else {
+                ar->arPairwiseCryptoLen = value;
+            }
+            break;
+        case IEEE80211_PARAM_MCASTCIPHER:
+            switch (value) {
+                case IEEE80211_CIPHER_AES_CCM:
+                    ar->arGroupCrypto = AES_CRYPT;
+                    profChanged       = TRUE;
+                    break;
+                case IEEE80211_CIPHER_TKIP:
+                    ar->arGroupCrypto = TKIP_CRYPT;
+                    profChanged       = TRUE;
+                    break;
+                case IEEE80211_CIPHER_WEP:
+                    ar->arGroupCrypto = WEP_CRYPT;
+                    profChanged       = TRUE;
+                    break;
+                case IEEE80211_CIPHER_NONE:
+                    ar->arGroupCrypto = NONE_CRYPT;
+                    profChanged       = TRUE;
+                    break;
+            }
+            break;
+        case IEEE80211_PARAM_MCASTKEYLEN:
+            if (!IEEE80211_IS_VALID_WEP_CIPHER_LEN(value)) {
+                ret = -EIO;
+            } else {
+                ar->arGroupCryptoLen = value;
+            }
+            break;
+        case IEEE80211_PARAM_COUNTERMEASURES:
+            if (ar->arWmiReady == FALSE) {
+                return -EIO;
+            }
+            wmi_set_tkip_countermeasures_cmd(ar->arWmi, value);
+            break;
+        default:
+            break;
+    }
+    if ((ar->arNextMode != AP_NETWORK) && (profChanged == TRUE)) {
+        /*
+         * profile has changed.  Erase ssid to signal change
+         */
+        A_MEMZERO(ar->arSsid, sizeof(ar->arSsid));
+    }
+    ar->ap_profile_flag = 1; /* There is a change in profile */
+
+    return ret;
+}
+
+int
+ar6000_ioctl_setkey(AR_SOFTC_T *ar, struct ieee80211req_key *ik)
+{
+    KEY_USAGE keyUsage;
+    A_STATUS status;
+    CRYPTO_TYPE keyType = NONE_CRYPT;
+    A_UINT8 null_addr[]={0x0,0x0,0x0,0x0,0x0,0x0};
+    A_UINT8 bcast_addr[]={0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
+
+#ifdef USER_KEYS
+    ar->user_saved_keys.keyOk = FALSE;
+#endif
+    if ( (0 == memcmp(ik->ik_macaddr, null_addr, IEEE80211_ADDR_LEN)) ||
+         (0 == memcmp(ik->ik_macaddr, bcast_addr, IEEE80211_ADDR_LEN)) ) {
+        keyUsage = GROUP_USAGE;
+        if(ar->arNextMode == AP_NETWORK) {
+            A_MEMCPY(&ar->ap_mode_bkey, ik,
+                     sizeof(struct ieee80211req_key));
+        }
+#ifdef USER_KEYS
+        A_MEMCPY(&ar->user_saved_keys.bcast_ik, ik,
+                 sizeof(struct ieee80211req_key));
+#endif
+    } else {
+        keyUsage = PAIRWISE_USAGE;
+#ifdef USER_KEYS
+        A_MEMCPY(&ar->user_saved_keys.ucast_ik, ik,
+                 sizeof(struct ieee80211req_key));
+#endif
+    }
+
+    switch (ik->ik_type) {
+        case IEEE80211_CIPHER_WEP:
+            keyType = WEP_CRYPT;
+            break;
+        case IEEE80211_CIPHER_TKIP:
+            keyType = TKIP_CRYPT;
+            break;
+        case IEEE80211_CIPHER_AES_CCM:
+            keyType = AES_CRYPT;
+            break;
+        default:
+            break;
+    }
+#ifdef USER_KEYS
+    ar->user_saved_keys.keyType = keyType;
+#endif
+    if (IEEE80211_CIPHER_CCKM_KRK != ik->ik_type) {
+        if (NONE_CRYPT == keyType) {
+            return -EIO;
+        }
+
+        if (((WPA_PSK_AUTH == ar->arAuthMode) || (WPA2_PSK_AUTH == ar->arAuthMode)) &&
+            (GROUP_USAGE == keyUsage))
+        {
+            A_UNTIMEOUT(&ar->disconnect_timer);
+        }
+
+        status = wmi_addKey_cmd(ar->arWmi, ik->ik_keyix, keyType, keyUsage,
+                                ik->ik_keylen, (A_UINT8 *)&ik->ik_keyrsc,
+                                ik->ik_keydata, KEY_OP_INIT_VAL, ik->ik_macaddr,
+                                SYNC_BOTH_WMIFLAG);
+
+        if (status != A_OK) {
+            return -EIO;
+        }
+    } else {
+        status = wmi_add_krk_cmd(ar->arWmi, ik->ik_keydata);
+    }
+
+#ifdef USER_KEYS
+    ar->user_saved_keys.keyOk = TRUE;
+#endif
+
+    return 0;
+}
+
 int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 {
     AR_SOFTC_T *ar = (AR_SOFTC_T *)netdev_priv(dev);
     HIF_DEVICE *hifDevice = ar->arHifDevice;
-    int ret, param, param2;
+    int ret, param;
     unsigned int address = 0;
     unsigned int length = 0;
     unsigned char *buffer;
@@ -978,8 +1310,7 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
     WMI_SET_AKMP_PARAMS_CMD  akmpParams;
     WMI_SET_PMKID_LIST_CMD   pmkidInfo;
 
-    if (cmd == AR6000_IOCTL_EXTENDED)
-    {
+    if (cmd == AR6000_IOCTL_EXTENDED) {
         /*
          * This allows for many more wireless ioctls than would otherwise
          * be available.  Applications embed the actual ioctl command in
@@ -988,9 +1319,20 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
          */
         get_user(cmd, (int *)rq->ifr_data);
         userdata = (char *)(((unsigned int *)rq->ifr_data)+1);
-    }
-    else
-    {
+
+        if(is_xioctl_allowed(ar->arNextMode, cmd) != A_OK) {
+            A_PRINTF("xioctl: cmd=%d not allowed in this mode\n",cmd);
+            return -EOPNOTSUPP;
+        }
+    } else {
+        A_STATUS ret = is_iwioctl_allowed(ar->arNextMode, cmd);
+        if(ret == A_ENOTSUP) {
+            A_PRINTF("iwioctl: cmd=0x%x not allowed in this mode\n", cmd);
+            return -EOPNOTSUPP;
+        } else if (ret == A_ERROR) {
+            /* It is not our ioctl (out of range ioctl) */
+            return -EOPNOTSUPP;
+        }
         userdata = (char *)rq->ifr_data;
     }
 
@@ -1005,6 +1347,99 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
     ret = 0;
     switch(cmd)
     {
+        case IEEE80211_IOCTL_SETPARAM:
+        {
+            int param, value;
+            int *ptr = (int *)rq->ifr_ifru.ifru_newname;
+            if (ar->arWmiReady == FALSE) {
+                ret = -EIO;
+            } else {
+                param = *ptr++;
+                value = *ptr;
+                ret = ar6000_ioctl_setparam(ar,param,value);
+            }
+            break;
+        }
+        case IEEE80211_IOCTL_SETKEY:
+        {
+            struct ieee80211req_key keydata;
+            if (ar->arWmiReady == FALSE) {
+                ret = -EIO;
+            } else if (copy_from_user(&keydata, userdata,
+                            sizeof(struct ieee80211req_key))) {
+                ret = -EFAULT;
+            } else {
+                ar6000_ioctl_setkey(ar, &keydata);
+            }
+            break;
+        }
+        case IEEE80211_IOCTL_DELKEY:
+        case IEEE80211_IOCTL_SETOPTIE:
+        {
+            //ret = -EIO;
+            break;
+        }
+        case IEEE80211_IOCTL_SETMLME:
+        {
+            struct ieee80211req_mlme mlme;
+            if (ar->arWmiReady == FALSE) {
+                ret = -EIO;
+            } else if (copy_from_user(&mlme, userdata,
+                            sizeof(struct ieee80211req_mlme))) {
+                ret = -EFAULT;
+            } else {
+                switch (mlme.im_op) {
+                    case IEEE80211_MLME_AUTHORIZE:
+                        A_PRINTF("setmlme AUTHORIZE %02X:%02X\n",
+                            mlme.im_macaddr[4], mlme.im_macaddr[5]);
+                        break;
+                    case IEEE80211_MLME_UNAUTHORIZE:
+                        A_PRINTF("setmlme UNAUTHORIZE %02X:%02X\n",
+                            mlme.im_macaddr[4], mlme.im_macaddr[5]);
+                        break;
+                    case IEEE80211_MLME_DEAUTH:
+                        A_PRINTF("setmlme DEAUTH %02X:%02X\n",
+                            mlme.im_macaddr[4], mlme.im_macaddr[5]);
+                        //remove_sta(ar, mlme.im_macaddr);
+                        break;
+                    case IEEE80211_MLME_DISASSOC:
+                        A_PRINTF("setmlme DISASSOC %02X:%02X\n",
+                            mlme.im_macaddr[4], mlme.im_macaddr[5]);
+                        //remove_sta(ar, mlme.im_macaddr);
+                        break;
+                    default:
+                        return 0;
+                }
+
+                wmi_ap_set_mlme(ar->arWmi, mlme.im_op, mlme.im_macaddr,
+                                mlme.im_reason);
+            }
+            break;
+        }
+        case IEEE80211_IOCTL_ADDPMKID:
+        {
+            struct ieee80211req_addpmkid  req;
+            if (ar->arWmiReady == FALSE) {
+                ret = -EIO;
+            } else if (copy_from_user(&req, userdata, sizeof(struct ieee80211req_addpmkid))) {
+                ret = -EFAULT;
+            } else {
+                A_STATUS status;
+
+                AR_DEBUG_PRINTF("Add pmkid for %2.2x:%2.2x:%2.2x:%2.2x:%2.2x:%2.2x en=%d\n",
+                    req.pi_bssid[0], req.pi_bssid[1], req.pi_bssid[2],
+                    req.pi_bssid[3], req.pi_bssid[4], req.pi_bssid[5],
+                    req.pi_enable);
+
+                status = wmi_setPmkid_cmd(ar->arWmi, req.pi_bssid, req.pi_pmkid,
+                              req.pi_enable);
+
+                if (status != A_OK) {
+                    return -EIO;
+                }
+            }
+            break;
+        }
 #ifdef CONFIG_HOST_TCMD_SUPPORT
         case AR6000_XIOCTL_TCMD_CONT_TX:
             {
@@ -1035,6 +1470,7 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
                     case TCMD_CONT_RX_PROMIS:
                     case TCMD_CONT_RX_FILTER:
                     case TCMD_CONT_RX_SETMAC:
+                    case TCMD_CONT_RX_SET_ANT_SWITCH_TABLE:
                          wmi_test_cmd(ar->arWmi,(A_UINT8 *)&rxCmd,
                                                 sizeof(TCMD_CONT_RX));
                          break;
@@ -1109,9 +1545,23 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
             break;
 
         case AR6000_XIOCTL_BMI_TEST:
+/* ATHENV */
+#ifdef ANDROID_ENV
+            ret = A_OK;
+            put_user( wait_event_interruptible_timeout(
+                                          arEvent,
+                                          (ar->arWmiReady == TRUE),
+                                          wmitimeout * HZ),
+                      (unsigned int *)rq->ifr_data );
+            if (ar->arWmiReady == TRUE)
+     	        put_user(1, (unsigned int *)rq->ifr_data);
+            break;
+#else
            AR_DEBUG_PRINTF("No longer supported\n");
            ret = -EOPNOTSUPP;
            break;
+#endif
+/* ATHENV */
 
         case AR6000_XIOCTL_BMI_EXECUTE:
             get_user(address, (unsigned int *)userdata);
@@ -1146,7 +1596,11 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
             if (!arRawIfEnabled(ar)) {
                 /* make sure block size is set in case the target was reset since last
                   * BMI phase (i.e. flashup downloads) */
-                ret = ar6000_SetHTCBlockSize(ar);
+                ret = ar6000_set_htc_params(ar->arHifDevice,
+                                            ar->arTargetType,
+                                            0,  /* use default yield */
+                                            0   /* use default number of HTC ctrl buffers */
+                                            );
                 if (A_FAILED(ret)) {
                     break;
                 }
@@ -1175,6 +1629,10 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
                 buffer = rq->ifr_data + sizeof(length);
                 ret = ar6000_htc_raw_read(ar, (HTC_RAW_STREAM_ID)streamID,
                                           buffer, length);
+/* WIFI module porting, hanshirong, begin */
+                if (ret != length)
+                    printk("[HTC_RAW_READ] Read %d bytes, return %d bytes\n", length, ret);
+/* WIFI module porting, hanshirong, end */
                 put_user(ret, (unsigned int *)rq->ifr_data);
             } else {
                 ret = A_ERROR;
@@ -1189,12 +1647,121 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
                 buffer = userdata + sizeof(streamID) + sizeof(length);
                 ret = ar6000_htc_raw_write(ar, (HTC_RAW_STREAM_ID)streamID,
                                            buffer, length);
+/* WIFI module porting, hanshirong, begin */
+                if (ret != length)
+                    printk("[HTC_RAW_WRITE] Write %d bytes, return %d bytes\n", length, ret);
+/* WIFI module porting, hanshirong, end */
                 put_user(ret, (unsigned int *)rq->ifr_data);
             } else {
                 ret = A_ERROR;
             }
             break;
 #endif /* HTC_RAW_INTERFACE */
+
+        case AR6000_XIOCTL_BMI_LZ_STREAM_START:
+            get_user(address, (unsigned int *)userdata);
+            AR_DEBUG_PRINTF("Start Compressed Stream (address: 0x%x)\n", address);
+            ret = BMILZStreamStart(hifDevice, address);
+            break;
+
+        case AR6000_XIOCTL_BMI_LZ_DATA:
+            get_user(length, (unsigned int *)userdata);
+            AR_DEBUG_PRINTF("Send Compressed Data (length: %d)\n", length);
+            if ((buffer = (unsigned char *)A_MALLOC(length)) != NULL) {
+                A_MEMZERO(buffer, length);
+                if (copy_from_user(buffer, &userdata[sizeof(length)], length))
+                {
+                    ret = -EFAULT;
+                } else {
+                    ret = BMILZData(hifDevice, buffer, length);
+                }
+                A_FREE(buffer);
+            } else {
+                ret = -ENOMEM;
+            }
+            break;
+
+#if defined(CONFIG_TARGET_PROFILE_SUPPORT)
+        /*
+         * Optional support for Target-side profiling.
+         * Not needed in production.
+         */
+
+        /* Configure Target-side profiling */
+        case AR6000_XIOCTL_PROF_CFG:
+        {
+            A_UINT32 period;
+            A_UINT32 nbins;
+            get_user(period, (unsigned int *)userdata);
+            get_user(nbins, (unsigned int *)userdata + 1);
+
+            if (wmi_prof_cfg_cmd(ar->arWmi, period, nbins) != A_OK) {
+                ret = -EIO;
+            }
+
+            break;
+        }
+
+        /* Start a profiling bucket/bin at the specified address */
+        case AR6000_XIOCTL_PROF_ADDR_SET:
+        {
+            A_UINT32 addr;
+            get_user(addr, (unsigned int *)userdata);
+
+            if (wmi_prof_addr_set_cmd(ar->arWmi, addr) != A_OK) {
+                ret = -EIO;
+            }
+
+            break;
+        }
+
+        /* START Target-side profiling */
+        case AR6000_XIOCTL_PROF_START:
+            wmi_prof_start_cmd(ar->arWmi);
+            break;
+
+        /* STOP Target-side profiling */
+        case AR6000_XIOCTL_PROF_STOP:
+            wmi_prof_stop_cmd(ar->arWmi);
+            break;
+        case AR6000_XIOCTL_PROF_COUNT_GET:
+        {
+            if (ar->bIsDestroyProgress) {
+                return -EBUSY;
+            }
+            if (ar->arWmiReady == FALSE) {
+                return -EIO;
+            }
+            if (down_interruptible(&ar->arSem)) {
+                return -ERESTARTSYS;
+            }
+            if (ar->bIsDestroyProgress) {
+                up(&ar->arSem);
+                return -EBUSY;
+            }
+
+            prof_count_available = FALSE;
+            ret = prof_count_get(dev);
+            if (ret != A_OK) {
+                up(&ar->arSem);
+                return -EIO;
+            }
+
+            /* Wait for Target to respond. */
+            wait_event_interruptible(arEvent, prof_count_available);
+            if (signal_pending(current)) {
+                ret = -EINTR;
+            } else {
+                if (copy_to_user(userdata, &prof_count_results,
+                                 sizeof(prof_count_results)))
+                {
+                    ret = -EFAULT;
+                }
+            }
+            up(&ar->arSem);
+            break;
+        }
+#endif /* CONFIG_TARGET_PROFILE_SUPPORT */
 
         case AR6000_IOCTL_WMI_GETREV:
         {
@@ -1289,7 +1856,8 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
                                        scParams.pas_chdwell_time,
                                        scParams.shortScanRatio,
                                        scParams.scanCtrlFlags,
-                                       scParams.max_dfsch_act_time) != A_OK)
+                                       scParams.max_dfsch_act_time,
+                                       scParams.maxact_scan_per_ssid) != A_OK)
                 {
                     ret = -EIO;
                 }
@@ -1337,14 +1905,17 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
         }
         case AR6000_IOCTL_WMI_SETBSSFILTER:
         {
+            WMI_BSS_FILTER_CMD filt;
+
             if (ar->arWmiReady == FALSE) {
                 ret = -EIO;
+            } else if (copy_from_user(&filt, userdata,
+                                   sizeof(filt)))
+            {
+                ret = -EFAULT;
             } else {
-
-                get_user(param, (unsigned char *)userdata);
-                get_user(param2, (unsigned int *)(userdata + 1));
-		printk("SETBSSFILTER: filter 0x%x, mask: 0x%x\n", param, param2);
-                if (wmi_bssfilter_cmd(ar->arWmi, param, param2) != A_OK) {
+                if (wmi_bssfilter_cmd(ar->arWmi, filt.bssFilter, filt.ieMask)
+                        != A_OK) {
                     ret = -EIO;
                 }
             }
@@ -1404,6 +1975,7 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
             {
                 ret = -EFAULT;
             } else {
+                ar->arRTS = rtsCmd.threshold;
                 if (wmi_set_rts_cmd(ar->arWmi, rtsCmd.threshold)
                        != A_OK)
                 {
@@ -1572,6 +2144,12 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
         {
             A_UINT32 cookie;
 
+			/*BU5D06737 sihongfang 20100331 begin*/
+            if (ar->arWmiReady == FALSE) {
+                ret = -EIO;
+            }
+			/*BU5D06737 sihongfang 20100331 end*/
+            
             if (copy_from_user(&cookie, userdata, sizeof(cookie))) {
                 return -EFAULT;
             }
@@ -1604,11 +2182,18 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
         {
             struct ar6000_gpio_output_set_cmd_s gpio_output_set_cmd;
 
+            if (ar->bIsDestroyProgress) {
+                return -EBUSY;
+            }
             if (ar->arWmiReady == FALSE) {
                 return -EIO;
             }
             if (down_interruptible(&ar->arSem)) {
                 return -ERESTARTSYS;
+            }
+            if (ar->bIsDestroyProgress) {
+                up(&ar->arSem);
+                return -EBUSY;
             }
 
             if (copy_from_user(&gpio_output_set_cmd, userdata,
@@ -1630,11 +2215,18 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
         }
         case AR6000_XIOCTL_GPIO_INPUT_GET:
         {
+            if (ar->bIsDestroyProgress) {
+                return -EBUSY;
+            }
             if (ar->arWmiReady == FALSE) {
                 return -EIO;
             }
             if (down_interruptible(&ar->arSem)) {
                 return -ERESTARTSYS;
+            }
+            if (ar->bIsDestroyProgress) {
+                up(&ar->arSem);
+                return -EBUSY;
             }
 
             ret = ar6000_gpio_input_get(dev);
@@ -1663,11 +2255,18 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
         {
             struct ar6000_gpio_register_cmd_s gpio_register_cmd;
 
+            if (ar->bIsDestroyProgress) {
+                return -EBUSY;
+            }
             if (ar->arWmiReady == FALSE) {
                 return -EIO;
             }
             if (down_interruptible(&ar->arSem)) {
                 return -ERESTARTSYS;
+            }
+            if (ar->bIsDestroyProgress) {
+                up(&ar->arSem);
+                return -EBUSY;
             }
 
             if (copy_from_user(&gpio_register_cmd, userdata,
@@ -1695,11 +2294,18 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
         {
             struct ar6000_gpio_register_cmd_s gpio_register_cmd;
 
+            if (ar->bIsDestroyProgress) {
+                return -EBUSY;
+            }
             if (ar->arWmiReady == FALSE) {
                 return -EIO;
             }
             if (down_interruptible(&ar->arSem)) {
                 return -ERESTARTSYS;
+            }
+            if (ar->bIsDestroyProgress) {
+                up(&ar->arSem);
+                return -EBUSY;
             }
 
             if (copy_from_user(&gpio_register_cmd, userdata,
@@ -1733,11 +2339,18 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
         {
             struct ar6000_gpio_intr_ack_cmd_s gpio_intr_ack_cmd;
 
+            if (ar->bIsDestroyProgress) {
+                return -EBUSY;
+            }
             if (ar->arWmiReady == FALSE) {
                 return -EIO;
             }
             if (down_interruptible(&ar->arSem)) {
                 return -ERESTARTSYS;
+            }
+            if (ar->bIsDestroyProgress) {
+                up(&ar->arSem);
+                return -EBUSY;
             }
 
             if (copy_from_user(&gpio_intr_ack_cmd, userdata,
@@ -1778,6 +2391,12 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
         case AR6000_XIOCTL_DBGLOG_CFG_MODULE:
         {
             struct ar6000_dbglog_module_config_s config;
+
+			/*BU5D06737 sihongfang 20100331 begin*/
+            if (ar->arWmiReady == FALSE) {
+                ret = -EIO;
+            }
+			/*BU5D06737 sihongfang 20100331 end*/
 
             if (copy_from_user(&config, userdata, sizeof(config))) {
                 return -EFAULT;
@@ -1898,7 +2517,7 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
             break;
         }
 
-        case AR6000_XIOCTL_SET_ADHOC_BEACON_INTVAL:
+        case AR6000_XIOCTL_SET_BEACON_INTVAL:
         {
             WMI_BEACON_INT_CMD bIntvlCmd;
 
@@ -1913,6 +2532,10 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
             {
                 ret = -EIO;
             }
+            if(ret == 0) {
+                ar->ap_beacon_interval = bIntvlCmd.beaconInterval;
+                ar->ap_profile_flag = 1; /* There is a change in profile */
+            }
             break;
         }
         case IEEE80211_IOCTL_SETAUTHALG:
@@ -1926,14 +2549,20 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
                        sizeof(struct ieee80211req_authalg)))
             {
                 ret = -EFAULT;
-            } else if (req.auth_alg == AUTH_ALG_OPEN_SYSTEM) {
-                ar->arDot11AuthMode  = OPEN_AUTH;
-                ar->arPairwiseCrypto  = NONE_CRYPT;
-                ar->arGroupCrypto     = NONE_CRYPT;
-            } else if (req.auth_alg == AUTH_ALG_LEAP) {
-                ar->arDot11AuthMode   = LEAP_AUTH;
             } else {
-                ret = -EIO;
+                if (req.auth_alg & AUTH_ALG_OPEN_SYSTEM) {
+                    ar->arDot11AuthMode  |= OPEN_AUTH;
+                    ar->arPairwiseCrypto  = NONE_CRYPT;
+                    ar->arGroupCrypto     = NONE_CRYPT;
+                }
+                if (req.auth_alg & AUTH_ALG_SHARED_KEY) {
+                    ar->arDot11AuthMode  |= SHARED_AUTH;
+                    ar->arPairwiseCrypto  = WEP_CRYPT;
+                    ar->arGroupCrypto     = WEP_CRYPT;
+                }
+                if (req.auth_alg == AUTH_ALG_LEAP) {
+                    ar->arDot11AuthMode   = LEAP_AUTH;
+                }
             }
             break;
         }
@@ -1961,11 +2590,20 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
         case AR6000_XIOCTRL_WMI_SET_WLAN_STATE:
             get_user(ar->arWlanState, (unsigned int *)userdata);
             if (ar->arWmiReady == FALSE) {
+/* ATHENV */
+#ifndef ANDROID_ENV
                 ret = -EIO;
+#endif /* ! ANDROID_ENV */
+/* ATHENV */
                 break;
             }
 
             if (ar->arWlanState == WLAN_ENABLED) {
+/* ATHENV */
+#ifdef ANDROID_ENV
+                printk("Enable WLAN\n");
+#endif
+/* ATHENV */
                 /* Enable foreground scanning */
                 if (wmi_scanparams_cmd(ar->arWmi, scParams.fg_start_period,
                                        scParams.fg_end_period,
@@ -1975,7 +2613,8 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
                                        scParams.pas_chdwell_time,
                                        scParams.shortScanRatio,
                                        scParams.scanCtrlFlags,
-                                       scParams.max_dfsch_act_time) != A_OK)
+                                       scParams.max_dfsch_act_time,
+                                       scParams.maxact_scan_per_ssid) != A_OK)
                 {
                     ret = -EIO;
                 }
@@ -1995,6 +2634,11 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
                     }
                 }
             } else {
+/* ATHENV */
+#ifdef ANDROID_ENV
+                printk("Disable WLAN\n");
+#endif
+/* ATHENV */
                 /* Disconnect from the AP and disable foreground scanning */
                 AR6000_SPIN_LOCK(&ar->arLock, 0);
                 if (ar->arConnected == TRUE || ar->arConnectPending == TRUE) {
@@ -2004,7 +2648,7 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
                     AR6000_SPIN_UNLOCK(&ar->arLock, 0);
                 }
 
-                if (wmi_scanparams_cmd(ar->arWmi, 0xFFFF, 0, 0, 0, 0, 0, 0, 0xFF, 0) != A_OK)
+                if (wmi_scanparams_cmd(ar->arWmi, 0xFFFF, 0, 0, 0, 0, 0, 0, 0xFF, 0, 0) != A_OK)
                 {
                     ret = -EIO;
                 }
@@ -2021,7 +2665,7 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
             break;
         case AR6000_XIOCTL_WMI_STARTSCAN:
         {
-            WMI_START_SCAN_CMD setStartScanCmd;
+            WMI_START_SCAN_CMD setStartScanCmd, *cmdp;
 
             if (ar->arWmiReady == FALSE) {
                     ret = -EIO;
@@ -2030,11 +2674,27 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
                 {
                     ret = -EFAULT;
                 } else {
-                    if (wmi_startscan_cmd(ar->arWmi, setStartScanCmd.scanType,
-                                    setStartScanCmd.forceFgScan,
-                                    setStartScanCmd.isLegacy,
-                                    setStartScanCmd.homeDwellTime,
-                                    setStartScanCmd.forceScanInterval) != A_OK)
+                    if (setStartScanCmd.numChannels > 1) {
+                        cmdp = A_MALLOC(130);
+                        if (copy_from_user(cmdp, userdata,
+                                           sizeof (*cmdp) +
+                                           ((setStartScanCmd.numChannels - 1) *
+                                           sizeof(A_UINT16))))
+                        {
+                            kfree(cmdp);
+                            return -EFAULT;
+                        }
+                    } else {
+                        cmdp = &setStartScanCmd;
+                    }
+
+                    if (wmi_startscan_cmd(ar->arWmi, cmdp->scanType,
+                                          cmdp->forceFgScan,
+                                          cmdp->isLegacy,
+                                          cmdp->homeDwellTime,
+                                          cmdp->forceScanInterval,
+                                          cmdp->numChannels,
+                                          cmdp->channelList) != A_OK)
                     {
                         ret = -EIO;
                     }
@@ -2054,12 +2714,12 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
                     ret = -EFAULT;
                 } else {
                     returnStatus = wmi_set_fixrates_cmd(ar->arWmi, setFixRatesCmd.fixRateMask);
-                    if (returnStatus == A_EINVAL)
-                    {
+                    if (returnStatus == A_EINVAL) {
                         ret = -EINVAL;
-                    }
-                    else if(returnStatus != A_OK) {
+                    } else if(returnStatus != A_OK) {
                         ret = -EIO;
+                    } else {
+                        ar->ap_profile_flag = 1; /* There is a change in profile */
                     }
                 }
             break;
@@ -2071,12 +2731,19 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
             AR_SOFTC_T *ar = (AR_SOFTC_T *)netdev_priv(dev);
             int ret = 0;
 
+            if (ar->bIsDestroyProgress) {
+                return -EBUSY;
+            }
             if (ar->arWmiReady == FALSE) {
                 return -EIO;
             }
 
             if (down_interruptible(&ar->arSem)) {
                 return -ERESTARTSYS;
+            }
+            if (ar->bIsDestroyProgress) {
+                up(&ar->arSem);
+                return -EBUSY;
             }
             /* Used copy_from_user/copy_to_user to access user space data */
             if (copy_from_user(&getFixRatesCmd, userdata, sizeof(getFixRatesCmd))) {
@@ -2147,6 +2814,7 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
         {
             A_UINT32 addr, data;
             get_user(addr, (unsigned int *)userdata);
+            addr = TARG_VTOP(ar->arTargetType, addr);
             if (ar6000_ReadRegDiag(ar->arHifDevice, &addr, &data) != A_OK) {
                 ret = -EIO;
             }
@@ -2158,6 +2826,7 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
             A_UINT32 addr, data;
             get_user(addr, (unsigned int *)userdata);
             get_user(data, (unsigned int *)userdata + 1);
+            addr = TARG_VTOP(ar->arTargetType, addr);
             if (ar6000_WriteRegDiag(ar->arHifDevice, &addr, &data) != A_OK) {
                 ret = -EIO;
             }
@@ -2178,16 +2847,78 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
              }
              break;
         }
+        case AR6000_XIOCTL_WMI_SET_PARAMS:
+        {
+             WMI_SET_PARAMS_CMD cmd;
+             if (ar->arWmiReady == FALSE) {
+                 return -EIO;
+             } else if (copy_from_user(&cmd, userdata,
+                        sizeof(cmd))){
+                 ret = -EFAULT;
+             } else if (copy_from_user(&cmd, userdata,
+                        sizeof(cmd) + cmd.length))
+            {
+                ret = -EFAULT;
+            } else {
+                 if (wmi_set_params_cmd(ar->arWmi, cmd.opcode, cmd.length, cmd.buffer) != A_OK) {
+                     ret = -EIO;
+               }
+             }
+             break;
+        }
+        case AR6000_XIOCTL_WMI_SET_MCAST_FILTER:
+        {
+             WMI_SET_MCAST_FILTER_CMD cmd;
+             if (ar->arWmiReady == FALSE) {
+                 return -EIO;
+             } else if (copy_from_user(&cmd, userdata,
+                        sizeof(cmd))){
+                 ret = -EFAULT;
+             } else {
+                 if (wmi_set_mcast_filter_cmd(ar->arWmi, cmd.multicast_mac[0],
+                                                                                     cmd.multicast_mac[1],
+                                                                                     cmd.multicast_mac[2],
+                                                                                     cmd.multicast_mac[3]) != A_OK) {
+                     ret = -EIO;
+               }
+             }
+             break;
+        }
+        case AR6000_XIOCTL_WMI_DEL_MCAST_FILTER:
+        {
+             WMI_SET_MCAST_FILTER_CMD cmd;
+             if (ar->arWmiReady == FALSE) {
+                 return -EIO;
+             } else if (copy_from_user(&cmd, userdata,
+                        sizeof(cmd))){
+                 ret = -EFAULT;
+             } else {
+                 if (wmi_del_mcast_filter_cmd(ar->arWmi, cmd.multicast_mac[0],
+                                                                                     cmd.multicast_mac[1],
+                                                                                     cmd.multicast_mac[2],
+                                                                                     cmd.multicast_mac[3]) != A_OK) {
+                     ret = -EIO;
+               }
+             }
+             break;
+        }
         case AR6000_XIOCTL_WMI_GET_KEEPALIVE:
         {
             AR_SOFTC_T *ar = (AR_SOFTC_T *)netdev_priv(dev);
             WMI_GET_KEEPALIVE_CMD getKeepAlive;
             int ret = 0;
+            if (ar->bIsDestroyProgress) {
+                return -EBUSY;
+            }
             if (ar->arWmiReady == FALSE) {
                return -EIO;
             }
             if (down_interruptible(&ar->arSem)) {
                 return -ERESTARTSYS;
+            }
+            if (ar->bIsDestroyProgress) {
+                up(&ar->arSem);
+                return -EBUSY;
             }
             if (copy_from_user(&getKeepAlive, userdata,sizeof(getKeepAlive))) {
                ret = -EFAULT;
@@ -2219,29 +2950,29 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
             A_UINT8           appIeInfo[IEEE80211_APPIE_FRAME_MAX_LEN];
             A_UINT32            fType,ieLen;
 
-	    if (ar->arWmiReady == FALSE) {
-		    return -EIO;
-	    }
-	    get_user(fType, (A_UINT32 *)userdata);
-	    appIEcmd.mgmtFrmType = fType;
-	    if (appIEcmd.mgmtFrmType >= IEEE80211_APPIE_NUM_OF_FRAME) {
-		    ret = -EIO;
-	    } else {
-		    get_user(ieLen, (A_UINT32 *)(userdata + 4));
-		    appIEcmd.ieLen = ieLen;
-		    if (appIEcmd.ieLen > IEEE80211_APPIE_FRAME_MAX_LEN) {
-			    ret = -EIO;
-			    break;
-		    }
-		    if (copy_from_user(appIeInfo, userdata + 8, appIEcmd.ieLen)) {
-			    ret = -EFAULT;
-		    } else {
-			    if (wmi_set_appie_cmd(ar->arWmi, appIEcmd.mgmtFrmType,
-						  appIEcmd.ieLen,  appIeInfo) != A_OK)
-			    {
-				    ret = -EIO;
-			    }
-		    }
+            if (ar->arWmiReady == FALSE) {
+                return -EIO;
+            }
+            get_user(fType, (A_UINT32 *)userdata);
+            appIEcmd.mgmtFrmType = fType;
+            if (appIEcmd.mgmtFrmType >= IEEE80211_APPIE_NUM_OF_FRAME) {
+                ret = -EIO;
+            } else {
+                get_user(ieLen, (A_UINT32 *)(userdata + 4));
+                appIEcmd.ieLen = ieLen;
+                if (appIEcmd.ieLen > IEEE80211_APPIE_FRAME_MAX_LEN) {
+                    ret = -EIO;
+                    break;
+                }
+                if (copy_from_user(appIeInfo, userdata + 8, appIEcmd.ieLen)) {
+                    ret = -EFAULT;
+                } else {
+                    if (wmi_set_appie_cmd(ar->arWmi, appIEcmd.mgmtFrmType,
+                                          appIEcmd.ieLen,  appIeInfo) != A_OK)
+                    {
+                        ret = -EIO;
+                    }
+                }
             }
             break;
         }
@@ -2249,6 +2980,12 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
         {
             WMI_BSS_FILTER_CMD cmd;
             A_UINT32    filterType;
+
+			/*BU5D06737 sihongfang 20100331 begin*/
+            if (ar->arWmiReady == FALSE) {
+                ret = -EIO;
+            }
+			/*BU5D06737 sihongfang 20100331 end*/
 
             if (copy_from_user(&filterType, userdata, sizeof(A_UINT32)))
             {
@@ -2274,7 +3011,9 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
         {
             A_UINT32    wsc_status;
 
-            if (copy_from_user(&wsc_status, userdata, sizeof(A_UINT32)))
+            if (ar->arWmiReady == FALSE) {
+                return -EIO;
+            } else if (copy_from_user(&wsc_status, userdata, sizeof(A_UINT32)))
             {
                 return -EFAULT;
             }
@@ -2340,6 +3079,25 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
                 ret = -ENOMEM;
             }
 
+            break;
+        }
+        case AR6000_XIOCTL_SET_IP:
+        {
+            WMI_SET_IP_CMD setIP;
+
+            if (ar->arWmiReady == FALSE) {
+                ret = -EIO;
+            } else if (copy_from_user(&setIP, userdata,
+                                      sizeof(setIP)))
+            {
+                ret = -EFAULT;
+            } else {
+                if (wmi_set_ip_cmd(ar->arWmi,
+                                &setIP) != A_OK)
+                {
+                    ret = -EIO;
+                }
+            }
             break;
         }
 
@@ -2532,9 +3290,337 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
                 }
             }
             break;
+        case AR6000_XIOCTL_WMI_ABORT_SCAN:
+            if (ar->arWmiReady == FALSE) {
+                ret = -EIO;
+            }
+            ret = wmi_abort_scan_cmd(ar->arWmi);
+            break;
+        case AR6000_XIOCTL_AP_HIDDEN_SSID:
+        {
+            A_UINT8    hidden_ssid;
+            if (ar->arWmiReady == FALSE) {
+                ret = -EIO;
+            } else if (copy_from_user(&hidden_ssid, userdata, sizeof(hidden_ssid))) {
+                ret = -EFAULT;
+            } else {
+                wmi_ap_set_hidden_ssid(ar->arWmi, hidden_ssid);
+                ar->ap_hidden_ssid = hidden_ssid;
+                ar->ap_profile_flag = 1; /* There is a change in profile */
+            }
+            break;
+        }
+        case AR6000_XIOCTL_AP_GET_STA_LIST:
+        {
+            if (ar->arWmiReady == FALSE) {
+                ret = -EIO;
+            } else {
+                A_UINT8 i;
+                ap_get_sta_t temp;
+                A_MEMZERO(&temp, sizeof(temp));
+                for(i=0;i<AP_MAX_NUM_STA;i++) {
+                    A_MEMCPY(temp.sta[i].mac, ar->sta_list[i].mac, ATH_MAC_LEN);
+                    temp.sta[i].aid = ar->sta_list[i].aid;
+                }
+                if(copy_to_user((ap_get_sta_t *)rq->ifr_data, &temp,
+                                 sizeof(ar->sta_list))) {
+                    ret = -EFAULT;
+                }
+            }
+            break;
+        }
+        case AR6000_XIOCTL_AP_SET_NUM_STA:
+        {
+            A_UINT8    num_sta;
+            if (ar->arWmiReady == FALSE) {
+                ret = -EIO;
+            } else if (copy_from_user(&num_sta, userdata, sizeof(num_sta))) {
+                ret = -EFAULT;
+            } else if(num_sta > AP_MAX_NUM_STA) {
+                /* value out of range */
+                ret = -EINVAL;
+            } else {
+                wmi_ap_set_num_sta(ar->arWmi, num_sta);
+            }
+            break;
+        }
+        case AR6000_XIOCTL_AP_SET_ACL_POLICY:
+        {
+            A_UINT8    policy;
+            if (ar->arWmiReady == FALSE) {
+                ret = -EIO;
+            } else if (copy_from_user(&policy, userdata, sizeof(policy))) {
+                ret = -EFAULT;
+            } else if(policy == ar->g_acl.policy) {
+                /* No change in policy */
+            } else {
+                if(!(policy & AP_ACL_RETAIN_LIST_MASK)) {
+                    /* clear ACL list */
+                    memset(&ar->g_acl,0,sizeof(WMI_AP_ACL));
+                }
+                ar->g_acl.policy = policy;
+                wmi_ap_set_acl_policy(ar->arWmi, policy);
+            }
+            break;
+        }
+        case AR6000_XIOCTL_AP_SET_ACL_MAC:
+        {
+            WMI_AP_ACL_MAC_CMD    acl;
+            if (ar->arWmiReady == FALSE) {
+                ret = -EIO;
+            } else if (copy_from_user(&acl, userdata, sizeof(acl))) {
+                ret = -EFAULT;
+            } else {
+                if(acl_add_del_mac(&ar->g_acl, &acl)) {
+                    wmi_ap_acl_mac_list(ar->arWmi, &acl);
+                } else {
+                    A_PRINTF("ACL list error\n");
+                    ret = -EIO;
+                }
+            }
+            break;
+        }
+        case AR6000_XIOCTL_AP_GET_ACL_LIST:
+        {
+            if (ar->arWmiReady == FALSE) {
+                ret = -EIO;
+            } else if(copy_to_user((WMI_AP_ACL *)rq->ifr_data, &ar->g_acl,
+                                 sizeof(WMI_AP_ACL))) {
+                    ret = -EFAULT;
+            }
+            break;
+        }
+        case AR6000_XIOCTL_AP_COMMIT_CONFIG:
+        {
+            ret = ar6000_ap_mode_profile_commit(ar);
+            break;
+        }
+        case IEEE80211_IOCTL_GETWPAIE:
+        {
+            struct ieee80211req_wpaie wpaie;
+            if (ar->arWmiReady == FALSE) {
+                ret = -EIO;
+            } else if (copy_from_user(&wpaie, userdata, sizeof(wpaie))) {
+                ret = -EFAULT;
+            } else if (ar6000_ap_mode_get_wpa_ie(ar, &wpaie)) {
+                ret = -EFAULT;
+            } else if(copy_to_user(userdata, &wpaie, sizeof(wpaie))) {
+                ret = -EFAULT;
+            }
+            break;
+        }
+        case AR6000_XIOCTL_AP_CONN_INACT_TIME:
+        {
+            A_UINT32    period;
+            if (ar->arWmiReady == FALSE) {
+                ret = -EIO;
+            } else if (copy_from_user(&period, userdata, sizeof(period))) {
+                ret = -EFAULT;
+            } else {
+                wmi_ap_conn_inact_time(ar->arWmi, period);
+            }
+            break;
+        }
+        case AR6000_XIOCTL_AP_PROT_SCAN_TIME:
+        {
+            WMI_AP_PROT_SCAN_TIME_CMD  bgscan;
+            if (ar->arWmiReady == FALSE) {
+                ret = -EIO;
+            } else if (copy_from_user(&bgscan, userdata, sizeof(bgscan))) {
+                ret = -EFAULT;
+            } else {
+                wmi_ap_bgscan_time(ar->arWmi, bgscan.period_min, bgscan.dwell_ms);
+            }
+            break;
+        }
+        case AR6000_XIOCTL_AP_SET_COUNTRY:
+        {
+            ret = ar6000_ioctl_set_country(dev, rq);
+            break;
+        }
+        case AR6000_XIOCTL_AP_SET_DTIM:
+        {
+            WMI_AP_SET_DTIM_CMD  d;
+            if (ar->arWmiReady == FALSE) {
+                ret = -EIO;
+            } else if (copy_from_user(&d, userdata, sizeof(d))) {
+                ret = -EFAULT;
+            } else {
+                if(d.dtim > 0 && d.dtim < 11) {
+                    ar->ap_dtim_period = d.dtim;
+                    wmi_ap_set_dtim(ar->arWmi, d.dtim);
+                    ar->ap_profile_flag = 1; /* There is a change in profile */
+                } else {
+                    A_PRINTF("DTIM out of range. Valid range is [1-10]\n");
+                    ret = -EIO;
+                }
+            }
+            break;
+        }
+        case AR6000_XIOCTL_WMI_TARGET_EVENT_REPORT:
+        {
+            WMI_SET_TARGET_EVENT_REPORT_CMD evtCfgCmd;
+
+            if (ar->arWmiReady == FALSE) {
+                ret = -EIO;
+            }
+            if (copy_from_user(&evtCfgCmd, userdata,
+                               sizeof(evtCfgCmd))) {
+                ret = -EFAULT;
+                break;
+            }
+            ret = wmi_set_target_event_report_cmd(ar->arWmi, &evtCfgCmd);
+            break;
+        }
+        case AR6000_XIOCTL_AP_INTRA_BSS_COMM:
+        {
+            A_UINT8    intra=0;
+            if (ar->arWmiReady == FALSE) {
+                ret = -EIO;
+            } else if (copy_from_user(&intra, userdata, sizeof(intra))) {
+                ret = -EFAULT;
+            } else {
+                ar->intra_bss = (intra?1:0);
+            }
+            break;
+        }
+        case AR6000_XIOCTL_AP_GET_HIDDEN_SSID:
+        {
+            WMI_AP_HIDDEN_SSID_CMD ssid;
+            ssid.hidden_ssid = ar->ap_hidden_ssid;
+            
+            if (ar->arWmiReady == FALSE) {
+                ret = -EIO;
+            } else if(copy_to_user((WMI_AP_HIDDEN_SSID_CMD *)rq->ifr_data, 
+                                    &ssid, sizeof(WMI_AP_HIDDEN_SSID_CMD))) {
+                    ret = -EFAULT;
+            }
+            break;
+        }
+        case AR6000_XIOCTL_AP_GET_COUNTRY:
+        {
+            WMI_AP_SET_COUNTRY_CMD cty;
+            A_MEMCPY(cty.countryCode, ar->ap_country_code, 3);
+
+            if (ar->arWmiReady == FALSE) {
+                ret = -EIO;
+            } else if(copy_to_user((WMI_AP_SET_COUNTRY_CMD *)rq->ifr_data, 
+                                    &cty, sizeof(WMI_AP_SET_COUNTRY_CMD))) {
+                    ret = -EFAULT;
+            }
+            break;
+        }
+        case AR6000_XIOCTL_AP_GET_WMODE:
+        {
+            if (ar->arWmiReady == FALSE) {
+                ret = -EIO;
+            } else if(copy_to_user((A_UINT8 *)rq->ifr_data, 
+                                    &ar->ap_wmode, sizeof(A_UINT8))) {
+                    ret = -EFAULT;
+            }
+            break;
+        }
+        case AR6000_XIOCTL_AP_GET_DTIM:
+        {
+            WMI_AP_SET_DTIM_CMD dtim;
+            dtim.dtim = ar->ap_dtim_period;
+            
+            if (ar->arWmiReady == FALSE) {
+                ret = -EIO;
+            } else if(copy_to_user((WMI_AP_SET_DTIM_CMD *)rq->ifr_data, 
+                                    &dtim, sizeof(WMI_AP_SET_DTIM_CMD))) {
+                    ret = -EFAULT;
+            }
+            break;
+        }
+        case AR6000_XIOCTL_AP_GET_BINTVL:
+        {
+            WMI_BEACON_INT_CMD bi;
+            bi.beaconInterval = ar->ap_beacon_interval;
+            
+            if (ar->arWmiReady == FALSE) {
+                ret = -EIO;
+            } else if(copy_to_user((WMI_BEACON_INT_CMD *)rq->ifr_data, 
+                                    &bi, sizeof(WMI_BEACON_INT_CMD))) {
+                    ret = -EFAULT;
+            }
+            break;
+        }
+        case AR6000_XIOCTL_AP_GET_RTS:
+        {
+            WMI_SET_RTS_CMD rts;
+            rts.threshold = ar->arRTS;
+            
+            if (ar->arWmiReady == FALSE) {
+                ret = -EIO;
+            } else if(copy_to_user((WMI_SET_RTS_CMD *)rq->ifr_data, 
+                                    &rts, sizeof(WMI_SET_RTS_CMD))) {
+                    ret = -EFAULT;
+            }
+            break;
+        }
         default:
             ret = -EOPNOTSUPP;
     }
     return ret;
 }
 
+A_UINT8 mac_cmp_wild(A_UINT8 *mac, A_UINT8 *new_mac, A_UINT8 wild, A_UINT8 new_wild)
+{
+    A_UINT8 i;
+
+    for(i=0;i<ATH_MAC_LEN;i++) {
+        if((wild & 1<<i) && (new_wild & 1<<i)) continue;
+        if(mac[i] != new_mac[i]) return 1;
+    }
+    if((A_MEMCMP(new_mac, null_mac, 6)==0) && new_wild &&
+        (wild != new_wild)) {
+        return 1;
+    }
+
+    return 0;
+}
+
+A_UINT8    acl_add_del_mac(WMI_AP_ACL *a, WMI_AP_ACL_MAC_CMD *acl)
+{
+    A_INT8    already_avail=-1, free_slot=-1, i;
+
+    /* To check whether this mac is already there in our list */
+    for(i=AP_ACL_SIZE-1;i>=0;i--)
+    {
+        if(mac_cmp_wild(a->acl_mac[i], acl->mac, a->wildcard[i],
+            acl->wildcard)==0)
+                already_avail = i;
+
+        if(!((1 << i) & a->index))
+            free_slot = i;
+    }
+
+    if(acl->action == ADD_MAC_ADDR)
+    {
+        /* Dont add mac if it is already available */
+        if((already_avail >= 0) || (free_slot == -1))
+            return 0;
+
+        A_MEMCPY(a->acl_mac[free_slot], acl->mac, ATH_MAC_LEN);
+        a->index = a->index | (1 << free_slot);
+        acl->index = free_slot;
+        a->wildcard[free_slot] = acl->wildcard;
+        return 1;
+    }
+    else if(acl->action == DEL_MAC_ADDR)
+    {
+        if(acl->index > AP_ACL_SIZE)
+            return 0;
+
+        if(!(a->index & (1 << acl->index)))
+            return 0;
+
+        A_MEMZERO(a->acl_mac[acl->index],ATH_MAC_LEN);
+        a->index = a->index & ~(1 << acl->index);
+        a->wildcard[acl->index] = 0;
+        return 1;
+    }
+
+    return 0;
+}

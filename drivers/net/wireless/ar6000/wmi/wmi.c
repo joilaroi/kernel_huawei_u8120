@@ -1,26 +1,23 @@
-/*
- * Copyright (c) 2004-2007 Atheros Communications Inc.
- * All rights reserved.
- *
- * This module implements the hardware independent layer of the
- * Wireless Module Interface (WMI) protocol.
- *
- * $Id: //depot/sw/releases/olca2.0-GPL/host/wmi/wmi.c#3 $
- *
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  published by the Free Software Foundation;
- *
- *  Software distributed under the License is distributed on an "AS
- *  IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
- *  implied. See the License for the specific language governing
- *  rights and limitations under the License.
- *
- *
- *
- */
-
+// <copyright file="wmi.c" company="Atheros">
+//    Copyright (c) 2004-2008 Atheros Corporation.  All rights reserved.
+// 
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License version 2 as
+// published by the Free Software Foundation;
+//
+// Software distributed under the License is distributed on an "AS
+// IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// rights and limitations under the License.
+//
+//
+//------------------------------------------------------------------------------
+//==============================================================================
+// This module implements the hardware independent layer of the
+// Wireless Module Interface (WMI) protocol.
+//
+// Author(s): ="Atheros"
+//==============================================================================
 #include <a_config.h>
 #include <athdefs.h>
 #include <a_types.h>
@@ -28,10 +25,10 @@
 #include "htc.h"
 #include "htc_api.h"
 #include "wmi.h"
-#include <ieee80211.h>
-#include <ieee80211_node.h>
 #include <wlan_api.h>
 #include <wmi_api.h>
+#include <ieee80211.h>
+#include <ieee80211_node.h>
 #include "dset_api.h"
 #include "gpio_api.h"
 #include "wmi_host.h"
@@ -39,6 +36,7 @@
 #include "a_drv_api.h"
 #include "a_debug.h"
 #include "dbglog_api.h"
+#include "roaming.h"
 
 static A_STATUS wmi_ready_event_rx(struct wmi_t *wmip, A_UINT8 *datap, int len);
 
@@ -46,6 +44,7 @@ static A_STATUS wmi_connect_event_rx(struct wmi_t *wmip, A_UINT8 *datap,
                                      int len);
 static A_STATUS wmi_disconnect_event_rx(struct wmi_t *wmip, A_UINT8 *datap,
                                         int len);
+
 static A_STATUS wmi_tkip_micerr_event_rx(struct wmi_t *wmip, A_UINT8 *datap,
                                         int len);
 static A_STATUS wmi_bssInfo_event_rx(struct wmi_t *wmip, A_UINT8 *datap,
@@ -85,6 +84,7 @@ static A_STATUS wmi_rssiThresholdEvent_rx(struct wmi_t *wmip, A_UINT8 *datap, in
 static A_STATUS wmi_hbChallengeResp_rx(struct wmi_t *wmip, A_UINT8 *datap, int len);
 static A_STATUS wmi_reportErrorEvent_rx(struct wmi_t *wmip, A_UINT8 *datap, int len);
 static A_STATUS wmi_cac_event_rx(struct wmi_t *wmip, A_UINT8 *datap, int len);
+static A_STATUS wmi_channel_change_event_rx(struct wmi_t *wmip, A_UINT8 *datap, int len);
 static A_STATUS wmi_roam_tbl_event_rx(struct wmi_t *wmip, A_UINT8 *datap,
                                       int len);
 static A_STATUS wmi_roam_data_event_rx(struct wmi_t *wmip, A_UINT8 *datap,
@@ -93,6 +93,9 @@ static A_STATUS wmi_get_wow_list_event_rx(struct wmi_t *wmip, A_UINT8 *datap,
                                       int len);
 static A_STATUS
 wmi_get_pmkid_list_event_rx(struct wmi_t *wmip, A_UINT8 *datap, A_UINT32 len);
+
+static A_STATUS
+wmi_set_params_event_rx(struct wmi_t *wmip, A_UINT8 *datap, A_UINT32 len);
 
 #ifdef CONFIG_HOST_GPIO_SUPPORT
 static A_STATUS wmi_gpio_intr_rx(struct wmi_t *wmip, A_UINT8 *datap, int len);
@@ -115,7 +118,7 @@ static A_STATUS
 wmi_lqThresholdEvent_rx(struct wmi_t *wmip, A_UINT8 *datap, int len);
 
 static A_BOOL
-wmi_is_bitrate_index_valid(struct wmi_t *wmip, A_UINT32 rateIndex);
+wmi_is_bitrate_index_valid(struct wmi_t *wmip, A_INT32 rateIndex);
 
 static A_STATUS
 wmi_aplistEvent_rx(struct wmi_t *wmip, A_UINT8 *datap, int len);
@@ -125,7 +128,47 @@ wmi_dbglog_event_rx(struct wmi_t *wmip, A_UINT8 *datap, int len);
 
 static A_STATUS wmi_keepalive_reply_rx(struct wmi_t *wmip, A_UINT8 *datap, int len);
 
+A_STATUS wmi_cmd_send_xtnd(struct wmi_t *wmip, void *osbuf, WMIX_COMMAND_ID cmdId,
+                  WMI_SYNC_FLAG syncflag);
+
+A_UINT8 ar6000_get_upper_threshold(A_INT16 rssi, SQ_THRESHOLD_PARAMS *sq_thresh, A_UINT32 size);
+A_UINT8 ar6000_get_lower_threshold(A_INT16 rssi, SQ_THRESHOLD_PARAMS *sq_thresh, A_UINT32 size);
+
+void wmi_cache_configure_rssithreshold(struct wmi_t *wmip, WMI_RSSI_THRESHOLD_PARAMS_CMD *rssiCmd);
+void wmi_cache_configure_snrthreshold(struct wmi_t *wmip, WMI_SNR_THRESHOLD_PARAMS_CMD *snrCmd);
+static A_STATUS wmi_send_rssi_threshold_params(struct wmi_t *wmip,
+                              WMI_RSSI_THRESHOLD_PARAMS_CMD *rssiCmd);
+static A_STATUS wmi_send_snr_threshold_params(struct wmi_t *wmip,
+                             WMI_SNR_THRESHOLD_PARAMS_CMD *snrCmd);
+#if defined(CONFIG_TARGET_PROFILE_SUPPORT)
+static A_STATUS
+wmi_prof_count_rx(struct wmi_t *wmip, A_UINT8 *datap, int len);
+#endif /* CONFIG_TARGET_PROFILE_SUPPORT */
+
+static A_STATUS wmi_pspoll_event_rx(struct wmi_t *wmip, A_UINT8 *datap,
+                                     int len);
+static A_STATUS wmi_dtimexpiry_event_rx(struct wmi_t *wmip, A_UINT8 *datap,
+                                     int len);
+
+static A_STATUS wmi_peer_node_event_rx (struct wmi_t *wmip, A_UINT8 *datap,
+                                        int len);
+
+#if defined(UNDER_CE)
+#if defined(NDIS51_MINIPORT)
+unsigned int processDot11Hdr = 0;
+#else
+unsigned int processDot11Hdr = 1;
+#endif
+#else
+extern unsigned int processDot11Hdr;
+#endif
+
+/* ATHENV */
+#ifdef ANDROID_ENV
 int wps_enable;
+#endif
+/* ATHENV */
+
 static const A_INT32 wmi_rateTable[] = {
     1000,
     2000,
@@ -141,17 +184,17 @@ static const A_INT32 wmi_rateTable[] = {
     54000,
     0};
 
-#define MODE_A_SUPPORT_RATE_START       4
-#define MODE_A_SUPPORT_RATE_STOP        11
+#define MODE_A_SUPPORT_RATE_START       ((A_INT32) 4)
+#define MODE_A_SUPPORT_RATE_STOP        ((A_INT32) 11)
 
 #define MODE_GONLY_SUPPORT_RATE_START   MODE_A_SUPPORT_RATE_START
 #define MODE_GONLY_SUPPORT_RATE_STOP    MODE_A_SUPPORT_RATE_STOP
 
-#define MODE_B_SUPPORT_RATE_START       0
-#define MODE_B_SUPPORT_RATE_STOP        3
+#define MODE_B_SUPPORT_RATE_START       ((A_INT32) 0)
+#define MODE_B_SUPPORT_RATE_STOP        ((A_INT32) 3)
 
-#define MODE_G_SUPPORT_RATE_START       0
-#define MODE_G_SUPPORT_RATE_STOP        11
+#define MODE_G_SUPPORT_RATE_START       ((A_INT32) 0)
+#define MODE_G_SUPPORT_RATE_STOP        ((A_INT32) 11)
 
 #define MAX_NUMBER_OF_SUPPORT_RATES     (MODE_G_SUPPORT_RATE_STOP + 1)
 
@@ -167,12 +210,36 @@ const A_UINT8 up_to_ac[]= {
                 WMM_AC_VO,
             };
 
+#include "athstartpack.h"
+
+/* This stuff is used when we want a simple layer-3 visibility */
+typedef PREPACK struct _iphdr {
+    A_UINT8     ip_ver_hdrlen;          /* version and hdr length */
+    A_UINT8     ip_tos;                 /* type of service */
+    A_UINT16    ip_len;                 /* total length */
+    A_UINT16    ip_id;                  /* identification */
+    A_INT16     ip_off;                 /* fragment offset field */
+#define IP_DF 0x4000                    /* dont fragment flag */
+#define IP_MF 0x2000                    /* more fragments flag */
+#define IP_OFFMASK 0x1fff               /* mask for fragmenting bits */
+    A_UINT8     ip_ttl;                 /* time to live */
+    A_UINT8     ip_p;                   /* protocol */
+    A_UINT16    ip_sum;                 /* checksum */
+    A_UINT8     ip_src[4];              /* source and dest address */
+    A_UINT8     ip_dst[4];
+} POSTPACK iphdr;
+
+#include "athendpack.h"
+
+A_INT16 rssi_event_value = 0;
+A_INT16 snr_event_value = 0;
+
 void *
 wmi_init(void *devt)
 {
     struct wmi_t *wmip;
 
-    wmip = A_MALLOC(sizeof(struct wmi_t));
+    wmip = A_MALLOC (sizeof(struct wmi_t));
     if (wmip == NULL) {
         return (NULL);
     }
@@ -181,8 +248,12 @@ wmi_init(void *devt)
     wmip->wmi_devt = devt;
     wlan_node_table_init(wmip, &wmip->wmi_scan_table);
     wmi_qos_state_init(wmip);
+
     wmip->wmi_powerMode = REC_POWER;
-    wmip->wmi_phyMode = WMI_11G_MODE;
+    wmip->wmi_phyMode   = WMI_11G_MODE;
+
+    wmip->wmi_pair_crypto_type  = NONE_CRYPT;
+    wmip->wmi_grp_crypto_type   = NONE_CRYPT;
 
     return (wmip);
 }
@@ -206,12 +277,22 @@ wmi_qos_state_init(struct wmi_t *wmip)
         wmip->wmi_streamExistsForAC[i]=0;
     }
 
-        /* Initialize the static Wmi stream Pri to WMM AC mappings Arrays */
-    WMI_INIT_WMISTREAM_AC_MAP(wmip);
-
     UNLOCK_WMI(wmip);
 
     A_WMI_SET_NUMDATAENDPTS(wmip->wmi_devt, 1);
+}
+
+void
+wmi_set_control_ep(struct wmi_t * wmip, HTC_ENDPOINT_ID eid)
+{
+    A_ASSERT( eid != ENDPOINT_UNUSED);
+    wmip->wmi_endpoint_id = eid;
+}
+
+HTC_ENDPOINT_ID
+wmi_get_control_ep(struct wmi_t * wmip)
+{
+    return(wmip->wmi_endpoint_id);
 }
 
 void
@@ -296,7 +377,7 @@ wmi_dix_2_dot3(struct wmi_t *wmip, void *osbuf)
  * Assumes there is enough room in the buffer to add header.
  */
 A_STATUS
-wmi_data_hdr_add(struct wmi_t *wmip, void *osbuf, A_UINT8 msgType)
+wmi_data_hdr_add(struct wmi_t *wmip, void *osbuf, A_UINT8 msgType, A_BOOL bMoreData)
 {
     WMI_DATA_HDR     *dtHdr;
 
@@ -308,65 +389,246 @@ wmi_data_hdr_add(struct wmi_t *wmip, void *osbuf, A_UINT8 msgType)
 
     dtHdr = (WMI_DATA_HDR *)A_NETBUF_DATA(osbuf);
     dtHdr->info = msgType;
+    if (bMoreData) {
+        WMI_DATA_HDR_SET_MORE_BIT(dtHdr);
+    }
     dtHdr->rssi = 0;
 
     return (A_OK);
 }
 
-A_UINT8 wmi_implicit_create_pstream(struct wmi_t *wmip, void *osbuf, A_UINT8 dir, A_UINT8 up)
+A_UINT8 wmi_implicit_create_pstream(struct wmi_t *wmip, void *osbuf, A_UINT32 layer2Priority, A_BOOL wmmEnabled)
 {
-    A_UINT8         *datap;
-    A_UINT8         trafficClass = WMM_AC_BE, userPriority = up;
-    ATH_LLC_SNAP_HDR *llcHdr;
-    A_UINT16        ipType = IP_ETHERTYPE;
-    WMI_DATA_HDR     *dtHdr;
+    A_UINT8             *datap;
+    A_UINT8             trafficClass = WMM_AC_BE;
+    A_UINT16            ipType = IP_ETHERTYPE;
+    WMI_DATA_HDR        *dtHdr;
+    A_BOOL              streamExists = FALSE;
+    A_UINT8             userPriority;
+    A_UINT32            hdrsize;
+    ATH_LLC_SNAP_HDR    *llcHdr;
+
     WMI_CREATE_PSTREAM_CMD  cmd;
-    A_BOOL           streamExists = FALSE;
 
     A_ASSERT(osbuf != NULL);
 
+    //
+    // Initialize header size
+    //
+    hdrsize = 0;
+
     datap = A_NETBUF_DATA(osbuf);
 
-    if (up == UNDEFINED_PRI) {
-    llcHdr = (ATH_LLC_SNAP_HDR *)(datap + sizeof(WMI_DATA_HDR) +
-                                  sizeof(ATH_MAC_HDR));
+    if (!wmmEnabled)
+    {
+        /* If WMM is disabled all traffic goes as BE traffic */
+        userPriority = 0;
+    }
+    else
+    {
+        if (processDot11Hdr)
+        {
+             hdrsize = A_ROUND_UP(sizeof(struct ieee80211_qosframe),sizeof(A_UINT32));
+             llcHdr = (ATH_LLC_SNAP_HDR *)(datap + sizeof(WMI_DATA_HDR) +
+                          hdrsize);
+        }
+        else
+        {
+             llcHdr = (ATH_LLC_SNAP_HDR *)(datap + sizeof(WMI_DATA_HDR) +
+                          sizeof(ATH_MAC_HDR));
+        }
 
-        if (llcHdr->etherType == A_CPU2BE16(ipType)) {
-        /* Extract the endpoint info from the TOS field in the IP header */
-        userPriority = A_WMI_IPTOS_TO_USERPRIORITY(((A_UINT8 *)llcHdr) + sizeof(ATH_LLC_SNAP_HDR));
+        if (llcHdr->etherType == A_CPU2BE16(ipType))
+        {
+            /* Extract the endpoint info from the TOS field in the IP header */
+
+            userPriority = wmi_determine_userPriority (((A_UINT8 *)llcHdr) + sizeof(ATH_LLC_SNAP_HDR),layer2Priority);
+        }
+        else
+        {
+            userPriority = layer2Priority & 0x7;
         }
     }
 
-    if (userPriority < MAX_NUM_PRI) {
-        trafficClass = convert_userPriority_to_trafficClass(userPriority);
-    }
+    trafficClass = convert_userPriority_to_trafficClass(userPriority);
 
     dtHdr = (WMI_DATA_HDR *)datap;
-    if(dir==UPLINK_TRAFFIC)
-        dtHdr->info |= (userPriority & WMI_DATA_HDR_UP_MASK) << WMI_DATA_HDR_UP_SHIFT;  /* lower 3-bits are 802.1d priority */
+    dtHdr->info |= (userPriority & WMI_DATA_HDR_UP_MASK) << WMI_DATA_HDR_UP_SHIFT;  /* lower 3-bits are 802.1d priority */
 
     LOCK_WMI(wmip);
     streamExists = wmip->wmi_fatPipeExists;
     UNLOCK_WMI(wmip);
 
-    if (!(streamExists & (1 << trafficClass))) {
+    if (!(streamExists & (1 << trafficClass)))
+    {
 
-        A_MEMZERO(&cmd, sizeof(cmd));
-	    cmd.trafficClass = trafficClass;
-	    cmd.userPriority = userPriority;
-		cmd.inactivityInt = WMI_IMPLICIT_PSTREAM_INACTIVITY_INT;
-            /* Implicit streams are created with TSID 0xFF */
+        A_MEMZERO (&cmd, sizeof(cmd));
+        cmd.trafficClass    = trafficClass;
+        cmd.userPriority    = userPriority;
+        cmd.inactivityInt   = WMI_IMPLICIT_PSTREAM_INACTIVITY_INT;
+        /* Implicit streams are created with TSID 0xFF */
+
         cmd.tsid = WMI_IMPLICIT_PSTREAM;
-        wmi_create_pstream_cmd(wmip, &cmd);
+        wmi_create_pstream_cmd (wmip, &cmd);
     }
 
     return trafficClass;
 }
 
-WMI_PRI_STREAM_ID
-wmi_get_stream_id(struct wmi_t *wmip, A_UINT8 trafficClass)
+A_STATUS
+wmi_dot11_hdr_add (struct wmi_t *wmip, void *osbuf, NETWORK_TYPE mode)
 {
-    return WMI_ACCESSCATEGORY_WMISTREAM(wmip, trafficClass);
+    A_UINT8          *datap;
+    A_UINT16         typeorlen;
+    ATH_MAC_HDR      macHdr;
+    ATH_LLC_SNAP_HDR *llcHdr;
+    struct           ieee80211_frame *wh;
+    A_UINT32         hdrsize;
+
+    A_ASSERT(osbuf != NULL);
+
+    if (A_NETBUF_HEADROOM(osbuf) <
+        (sizeof(struct ieee80211_qosframe) +  sizeof(ATH_LLC_SNAP_HDR) + sizeof(WMI_DATA_HDR)))
+    {
+        return A_NO_MEMORY;
+    }
+
+    datap = A_NETBUF_DATA(osbuf);
+
+    typeorlen = *(A_UINT16 *)(datap + ATH_MAC_LEN + ATH_MAC_LEN);
+
+    if (!IS_ETHERTYPE(A_BE2CPU16(typeorlen))) {
+        /*
+         * packet is already in 802.3 format - return success
+         */
+        A_DPRINTF(DBG_WMI, (DBGFMT "packet already 802.3\n", DBGARG));
+        goto AddDot11Hdr;
+    }
+
+    /*
+     * Save mac fields and length to be inserted later
+     */
+    A_MEMCPY(macHdr.dstMac, datap, ATH_MAC_LEN);
+    A_MEMCPY(macHdr.srcMac, datap + ATH_MAC_LEN, ATH_MAC_LEN);
+    macHdr.typeOrLen = A_CPU2BE16(A_NETBUF_LEN(osbuf) - sizeof(ATH_MAC_HDR) +
+                                  sizeof(ATH_LLC_SNAP_HDR));
+
+    // Remove the Ethernet hdr
+    A_NETBUF_PULL(osbuf, sizeof(ATH_MAC_HDR));
+
+    /*
+     * Make room for LLC+SNAP headers
+     */
+    if (A_NETBUF_PUSH(osbuf, sizeof(ATH_LLC_SNAP_HDR)) != A_OK) {
+        return A_NO_MEMORY;
+    }
+
+    datap = A_NETBUF_DATA(osbuf);
+
+    llcHdr = (ATH_LLC_SNAP_HDR *)(datap);
+    llcHdr->dsap       = 0xAA;
+    llcHdr->ssap       = 0xAA;
+    llcHdr->cntl       = 0x03;
+    llcHdr->orgCode[0] = 0x0;
+    llcHdr->orgCode[1] = 0x0;
+    llcHdr->orgCode[2] = 0x0;
+    llcHdr->etherType  = typeorlen;
+
+AddDot11Hdr:
+    /* Make room for 802.11 hdr */
+    if (wmip->wmi_is_wmm_enabled)
+    {
+        hdrsize = A_ROUND_UP(sizeof(struct ieee80211_qosframe),sizeof(A_UINT32));
+        if (A_NETBUF_PUSH(osbuf, hdrsize) != A_OK)
+        {
+            return A_NO_MEMORY;
+        }
+        wh = (struct ieee80211_frame *) A_NETBUF_DATA(osbuf);
+        wh->i_fc[0] = IEEE80211_FC0_SUBTYPE_QOS;
+    }
+    else
+    {
+        hdrsize = A_ROUND_UP(sizeof(struct ieee80211_frame),sizeof(A_UINT32));
+        if (A_NETBUF_PUSH(osbuf, hdrsize) != A_OK)
+        {
+            return A_NO_MEMORY;
+        }
+        wh = (struct ieee80211_frame *) A_NETBUF_DATA(osbuf);
+        wh->i_fc[0] = IEEE80211_FC0_SUBTYPE_DATA;
+    }
+    /* Setup the SA & DA */
+    IEEE80211_ADDR_COPY(wh->i_addr2, macHdr.srcMac);
+
+    if (mode == INFRA_NETWORK) {
+        IEEE80211_ADDR_COPY(wh->i_addr3, macHdr.dstMac);
+    }
+    else if (mode == ADHOC_NETWORK) {
+        IEEE80211_ADDR_COPY(wh->i_addr1, macHdr.dstMac);
+    }
+
+    return (A_OK);
+}
+
+A_STATUS
+wmi_dot11_hdr_remove(struct wmi_t *wmip, void *osbuf)
+{
+    A_UINT8          *datap;
+    struct           ieee80211_frame *pwh,wh;
+    A_UINT8          type,subtype;
+    ATH_LLC_SNAP_HDR *llcHdr;
+    ATH_MAC_HDR      macHdr;
+    A_UINT32         hdrsize;
+
+    A_ASSERT(osbuf != NULL);
+    datap = A_NETBUF_DATA(osbuf);
+
+    pwh = (struct ieee80211_frame *)datap;
+    type = pwh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
+    subtype = pwh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK;
+
+    A_MEMCPY((A_UINT8 *)&wh, datap, sizeof(struct ieee80211_frame));
+
+    /* strip off the 802.11 hdr*/
+    if (subtype == IEEE80211_FC0_SUBTYPE_QOS) {
+        hdrsize = A_ROUND_UP(sizeof(struct ieee80211_qosframe),sizeof(A_UINT32));
+        A_NETBUF_PULL(osbuf, hdrsize);
+    } else if (subtype == IEEE80211_FC0_SUBTYPE_DATA) {
+        A_NETBUF_PULL(osbuf, sizeof(struct ieee80211_frame));
+    }
+
+    datap = A_NETBUF_DATA(osbuf);
+    llcHdr = (ATH_LLC_SNAP_HDR *)(datap);
+
+    macHdr.typeOrLen = llcHdr->etherType;
+
+    switch (wh.i_fc[1] & IEEE80211_FC1_DIR_MASK) {
+    case IEEE80211_FC1_DIR_NODS:
+        IEEE80211_ADDR_COPY(macHdr.dstMac, wh.i_addr1);
+        IEEE80211_ADDR_COPY(macHdr.srcMac, wh.i_addr2);
+        break;
+    case IEEE80211_FC1_DIR_TODS:
+        IEEE80211_ADDR_COPY(macHdr.dstMac, wh.i_addr3);
+        IEEE80211_ADDR_COPY(macHdr.srcMac, wh.i_addr2);
+        break;
+    case IEEE80211_FC1_DIR_FROMDS:
+        IEEE80211_ADDR_COPY(macHdr.dstMac, wh.i_addr1);
+        IEEE80211_ADDR_COPY(macHdr.srcMac, wh.i_addr3);
+        break;
+    case IEEE80211_FC1_DIR_DSTODS:
+        break;
+    }
+
+    // Remove the LLC Hdr.
+    A_NETBUF_PULL(osbuf, sizeof(ATH_LLC_SNAP_HDR));
+
+    // Insert the ATH MAC hdr.
+
+    A_NETBUF_PUSH(osbuf, sizeof(ATH_MAC_HDR));
+    datap = A_NETBUF_DATA(osbuf);
+
+    A_MEMCPY (datap, &macHdr, sizeof(ATH_MAC_HDR));
+
+    return A_OK;
 }
 
 /*
@@ -476,6 +738,11 @@ wmi_control_rx_xtnd(struct wmi_t *wmip, void *osbuf)
     case (WMIX_DBGLOG_EVENTID):
         wmi_dbglog_event_rx(wmip, datap, len);
         break;
+#if defined(CONFIG_TARGET_PROFILE_SUPPORT)
+    case (WMIX_PROF_COUNT_EVENTID):
+        wmi_prof_count_rx(wmip, datap, len);
+        break;
+#endif /* CONFIG_TARGET_PROFILE_SUPPORT */
     default:
         A_DPRINTF(DBG_WMI|DBG_ERROR,
             (DBGFMT "Unknown id 0x%x\n", DBGARG, id));
@@ -522,6 +789,8 @@ wmi_control_rx(struct wmi_t *wmip, void *osbuf)
     datap = A_NETBUF_DATA(osbuf);
     len = A_NETBUF_LEN(osbuf);
 
+    loggingReq = 0;
+
     ar6000_get_driver_cfg(wmip->wmi_devt,
                     AR6000_DRIVER_CFG_LOG_RAW_WMI_MSGS,
                     &loggingReq);
@@ -567,6 +836,11 @@ wmi_control_rx(struct wmi_t *wmip, void *osbuf)
         status = wmi_disconnect_event_rx(wmip, datap, len);
         A_WMI_SEND_EVENT_TO_APP(wmip->wmi_devt, id, datap, len);
         break;
+    case (WMI_PEER_NODE_EVENTID):
+        A_DPRINTF (DBG_WMI, (DBGFMT "WMI_PEER_NODE_EVENTID\n", DBGARG));
+        status = wmi_peer_node_event_rx(wmip, datap, len);
+        A_WMI_SEND_EVENT_TO_APP(wmip->wmi_devt, id, datap, len);
+        break;
     case (WMI_TKIP_MICERR_EVENTID):
         A_DPRINTF(DBG_WMI, (DBGFMT "WMI_TKIP_MICERR_EVENTID\n", DBGARG));
         status = wmi_tkip_micerr_event_rx(wmip, datap, len);
@@ -574,7 +848,9 @@ wmi_control_rx(struct wmi_t *wmip, void *osbuf)
     case (WMI_BSSINFO_EVENTID):
         A_DPRINTF(DBG_WMI, (DBGFMT "WMI_BSSINFO_EVENTID\n", DBGARG));
         status = wmi_bssInfo_event_rx(wmip, datap, len);
-        A_WMI_SEND_EVENT_TO_APP(wmip->wmi_devt, id, datap, len);
+/* WIFI module porting, hanshirong, begin */
+        //A_WMI_SEND_EVENT_TO_APP(wmip->wmi_devt, id, datap, len);
+/* WIFI module porting, hanshirong, end */
         break;
     case (WMI_REGDOMAIN_EVENTID):
         A_DPRINTF(DBG_WMI, (DBGFMT "WMI_REGDOMAIN_EVENTID\n", DBGARG));
@@ -589,7 +865,9 @@ wmi_control_rx(struct wmi_t *wmip, void *osbuf)
              * pstream creation. Do we need to send this event to App..?
              * no harm in sending it.
              */
-        A_WMI_SEND_EVENT_TO_APP(wmip->wmi_devt, id, datap, len);
+/* WIFI module porting, hanshirong, begin */
+        //A_WMI_SEND_EVENT_TO_APP(wmip->wmi_devt, id, datap, len);
+/* WIFI module porting, hanshirong, end */
         break;
     case (WMI_NEIGHBOR_REPORT_EVENTID):
         A_DPRINTF(DBG_WMI, (DBGFMT "WMI_NEIGHBOR_REPORT_EVENTID\n", DBGARG));
@@ -598,7 +876,9 @@ wmi_control_rx(struct wmi_t *wmip, void *osbuf)
     case (WMI_SCAN_COMPLETE_EVENTID):
         A_DPRINTF(DBG_WMI, (DBGFMT "WMI_SCAN_COMPLETE_EVENTID\n", DBGARG));
         status = wmi_scanComplete_rx(wmip, datap, len);
-        A_WMI_SEND_EVENT_TO_APP(wmip->wmi_devt, id, datap, len);
+/* WIFI module porting, hanshirong, begin */
+        //A_WMI_SEND_EVENT_TO_APP(wmip->wmi_devt, id, datap, len);
+/* WIFI module porting, hanshirong, end */
         break;
     case (WMI_CMDERROR_EVENTID):
         A_DPRINTF(DBG_WMI, (DBGFMT "WMI_CMDERROR_EVENTID\n", DBGARG));
@@ -633,6 +913,10 @@ wmi_control_rx(struct wmi_t *wmip, void *osbuf)
         A_DPRINTF(DBG_WMI, (DBGFMT "WMI_CAC_EVENTID\n", DBGARG));
         status = wmi_cac_event_rx(wmip, datap, len);
         break;
+    case (WMI_CHANNEL_CHANGE_EVENTID):
+        A_DPRINTF(DBG_WMI, (DBGFMT "WMI_CHANNEL_CHANGE_EVENTID\n", DBGARG));
+        status = wmi_channel_change_event_rx(wmip, datap, len);
+        break;
     case (WMI_REPORT_ROAM_DATA_EVENTID):
         A_DPRINTF(DBG_WMI, (DBGFMT "WMI_REPORT_ROAM_DATA_EVENTID\n", DBGARG));
         status = wmi_roam_data_event_rx(wmip, datap, len);
@@ -655,7 +939,6 @@ wmi_control_rx(struct wmi_t *wmip, void *osbuf)
     case (WMI_SNR_THRESHOLD_EVENTID):
         A_DPRINTF(DBG_WMI, (DBGFMT "WMI_SNR_THRESHOLD_EVENTID\n", DBGARG));
         status = wmi_snrThresholdEvent_rx(wmip, datap, len);
-        A_WMI_SEND_EVENT_TO_APP(wmip->wmi_devt, id, datap, len);
         break;
     case (WMI_LQ_THRESHOLD_EVENTID):
         A_DPRINTF(DBG_WMI, (DBGFMT "WMI_LQ_THRESHOLD_EVENTID\n", DBGARG));
@@ -677,6 +960,18 @@ wmi_control_rx(struct wmi_t *wmip, void *osbuf)
         A_DPRINTF(DBG_WMI, (DBGFMT "WMI_GET_PMKID_LIST Event\n", DBGARG));
         status = wmi_get_pmkid_list_event_rx(wmip, datap, len);
         break;
+    case (WMI_PSPOLL_EVENTID):
+        A_DPRINTF(DBG_WMI, (DBGFMT "WMI_PSPOLL_EVENT\n", DBGARG));
+        status = wmi_pspoll_event_rx(wmip, datap, len);
+        break;
+    case (WMI_DTIMEXPIRY_EVENTID):
+        A_DPRINTF(DBG_WMI, (DBGFMT "WMI_DTIMEXPIRY_EVENT\n", DBGARG));
+        status = wmi_dtimexpiry_event_rx(wmip, datap, len);
+        break;
+    case (WMI_SET_PARAMS_REPLY_EVENTID):
+        A_DPRINTF(DBG_WMI, (DBGFMT "WMI_SET_PARAMS_REPLY Event\n", DBGARG));
+        status = wmi_set_params_event_rx(wmip, datap, len);
+        break;
     default:
         A_DPRINTF(DBG_WMI|DBG_ERROR,
             (DBGFMT "Unknown id 0x%x\n", DBGARG, id));
@@ -690,6 +985,40 @@ wmi_control_rx(struct wmi_t *wmip, void *osbuf)
     return status;
 }
 
+/* Send a "simple" wmi command -- one with no arguments */
+static A_STATUS
+wmi_simple_cmd(struct wmi_t *wmip, WMI_COMMAND_ID cmdid)
+{
+    void *osbuf;
+
+    osbuf = A_NETBUF_ALLOC(0);
+
+    if (osbuf == NULL) {
+        return A_NO_MEMORY;
+    }
+
+    return (wmi_cmd_send(wmip, osbuf, cmdid, NO_SYNC_WMIFLAG));
+}
+
+/* Send a "simple" extended wmi command -- one with no arguments.
+   Enabling this command only if GPIO or profiling support is enabled.
+   This is to suppress warnings on some platforms */
+#if defined(CONFIG_HOST_GPIO_SUPPORT) || defined(CONFIG_TARGET_PROFILE_SUPPORT)
+static A_STATUS
+wmi_simple_cmd_xtnd(struct wmi_t *wmip, WMIX_COMMAND_ID cmdid)
+{
+    void *osbuf;
+
+    osbuf = A_NETBUF_ALLOC(0);
+
+    if (osbuf == NULL) {
+        return A_NO_MEMORY;
+    }
+
+    return (wmi_cmd_send_xtnd(wmip, osbuf, cmdid, NO_SYNC_WMIFLAG));
+}
+#endif
+
 static A_STATUS
 wmi_ready_event_rx(struct wmi_t *wmip, A_UINT8 *datap, int len)
 {
@@ -700,20 +1029,42 @@ wmi_ready_event_rx(struct wmi_t *wmip, A_UINT8 *datap, int len)
     }
     A_DPRINTF(DBG_WMI, (DBGFMT "Enter\n", DBGARG));
     wmip->wmi_ready = TRUE;
-    A_WMI_READY_EVENT(wmip->wmi_devt, ev->macaddr, ev->phyCapability);
+    A_WMI_READY_EVENT(wmip->wmi_devt, ev->macaddr, ev->phyCapability,
+                      ev->version);
 
     return A_OK;
 }
+
+#define LE_READ_4(p)                            \
+    ((A_UINT32)                            \
+     ((((A_UINT8 *)(p))[0]      ) | (((A_UINT8 *)(p))[1] <<  8) | \
+      (((A_UINT8 *)(p))[2] << 16) | (((A_UINT8 *)(p))[3] << 24)))
+
+static int __inline
+iswmmoui(const A_UINT8 *frm)
+{
+    return frm[1] > 3 && LE_READ_4(frm+2) == ((WMM_OUI_TYPE<<24)|WMM_OUI);
+}
+
+static int __inline
+iswmmparam(const A_UINT8 *frm)
+{
+    return frm[1] > 5 && frm[6] == WMM_PARAM_OUI_SUBTYPE;
+}
+
 
 static A_STATUS
 wmi_connect_event_rx(struct wmi_t *wmip, A_UINT8 *datap, int len)
 {
     WMI_CONNECT_EVENT *ev;
+    A_UINT8 *pie,*peie;
 
-    if (len < sizeof(WMI_CONNECT_EVENT)) {
+    if (len < sizeof(WMI_CONNECT_EVENT))
+    {
         return A_EINVAL;
     }
     ev = (WMI_CONNECT_EVENT *)datap;
+
     A_DPRINTF(DBG_WMI,
         (DBGFMT "freq %d bssid %2.2x:%2.2x:%2.2x:%2.2x:%2.2x:%2.2x\n",
         DBGARG, ev->channel,
@@ -722,9 +1073,40 @@ wmi_connect_event_rx(struct wmi_t *wmip, A_UINT8 *datap, int len)
 
     A_MEMCPY(wmip->wmi_bssid, ev->bssid, ATH_MAC_LEN);
 
-    A_WMI_CONNECT_EVENT(wmip->wmi_devt, ev->channel, ev->bssid,
+    /* initialize pointer to start of assoc rsp IEs */
+    pie = ev->assocInfo + ev->beaconIeLen + ev->assocReqLen +
+                            sizeof(A_UINT16)  +  /* capinfo*/
+                            sizeof(A_UINT16)  +  /* status Code */
+                            sizeof(A_UINT16)  ;  /* associd */
+
+    /* initialize pointer to end of assoc rsp IEs */
+    peie = ev->assocInfo + ev->beaconIeLen + ev->assocReqLen + ev->assocRespLen;
+
+    while (pie < peie)
+    {
+        switch (*pie)
+        {
+            case IEEE80211_ELEMID_VENDOR:
+                if (iswmmoui(pie))
+                {
+                    if(iswmmparam (pie))
+                    {
+                        wmip->wmi_is_wmm_enabled = TRUE;
+                    }
+                }
+            break;
+        }
+
+        if (wmip->wmi_is_wmm_enabled)
+        {
+            break;
+        }
+        pie += pie[1] + 2;
+    }
+
+    A_WMI_CONNECT_EVENT (wmip->wmi_devt, ev->channel, ev->bssid,
                          ev->listenInterval, ev->beaconInterval,
-                         ev->networkType, ev->beaconIeLen,
+                         (NETWORK_TYPE) ev->networkType, ev->beaconIeLen,
                          ev->assocReqLen, ev->assocRespLen,
                          ev->assocInfo);
 
@@ -781,8 +1163,32 @@ wmi_disconnect_event_rx(struct wmi_t *wmip, A_UINT8 *datap, int len)
 
     A_MEMZERO(wmip->wmi_bssid, sizeof(wmip->wmi_bssid));
 
+    wmip->wmi_is_wmm_enabled = FALSE;
+    wmip->wmi_pair_crypto_type = NONE_CRYPT;
+    wmip->wmi_grp_crypto_type = NONE_CRYPT;
+
     A_WMI_DISCONNECT_EVENT(wmip->wmi_devt, ev->disconnectReason, ev->bssid,
                             ev->assocRespLen, ev->assocInfo, ev->protocolReasonStatus);
+
+    return A_OK;
+}
+
+static A_STATUS
+wmi_peer_node_event_rx(struct wmi_t *wmip, A_UINT8 *datap, int len)
+{
+    WMI_PEER_NODE_EVENT *ev;
+
+    if (len < sizeof(WMI_PEER_NODE_EVENT)) {
+        return A_EINVAL;
+    }
+    ev = (WMI_PEER_NODE_EVENT *)datap;
+    if (ev->eventCode == PEER_NODE_JOIN_EVENT) {
+        A_DPRINTF (DBG_WMI, (DBGFMT "Joined node with Macaddr: ", DBGARG));
+    } else if(ev->eventCode == PEER_NODE_LEAVE_EVENT) {
+        A_DPRINTF (DBG_WMI, (DBGFMT "left node with Macaddr: ", DBGARG));
+    }
+
+    A_WMI_PEER_EVENT (wmip->wmi_devt, ev->eventCode, ev->peerMacAddr);
 
     return A_OK;
 }
@@ -806,13 +1212,26 @@ wmi_tkip_micerr_event_rx(struct wmi_t *wmip, A_UINT8 *datap, int len)
 static A_STATUS
 wmi_bssInfo_event_rx(struct wmi_t *wmip, A_UINT8 *datap, int len)
 {
-    bss_t *bss;
+    bss_t *bss = NULL;
     WMI_BSS_INFO_HDR *bih;
     A_UINT8 *buf;
-    A_UINT32 nodeCachingAllowed;
+    A_UINT32 nodeCachingAllowed = 1;
+    A_UCHAR cached_ssid_len = 0;
+    A_UCHAR cached_ssid_buf[IEEE80211_NWID_LEN] = {0};
+    A_UINT8 beacon_ssid_len = 0;
 
     if (len <= sizeof(WMI_BSS_INFO_HDR)) {
         return A_EINVAL;
+    }
+
+    bih = (WMI_BSS_INFO_HDR *)datap;
+    bss = wlan_find_node(&wmip->wmi_scan_table, bih->bssid);
+
+    if (bih->rssi > 0) {
+        if (NULL == bss)
+            return A_OK;  //no node found in the table, just drop the node with incorrect RSSI
+        else
+            bih->rssi = bss->ni_rssi; //Adjust RSSI in datap in case it is used in A_WMI_BSSINFO_EVENT_RX
     }
 
     A_WMI_BSSINFO_EVENT_RX(wmip->wmi_devt, datap, len);
@@ -827,8 +1246,6 @@ wmi_bssInfo_event_rx(struct wmi_t *wmip, A_UINT8 *datap, int len)
         return A_OK;
     }
 
-
-    bih = (WMI_BSS_INFO_HDR *)datap;
     buf = datap + sizeof(WMI_BSS_INFO_HDR);
     len -= sizeof(WMI_BSS_INFO_HDR);
 
@@ -838,19 +1255,51 @@ wmi_bssInfo_event_rx(struct wmi_t *wmip, A_UINT8 *datap, int len)
               bih->bssid[1], bih->bssid[2], bih->bssid[3], bih->bssid[4],
               bih->bssid[5]));
 
-    if(wps_enable && (bih->frameType == PROBERESP_FTYPE) ) {
-	    printk("%s() A_OK 2\n", __FUNCTION__);
-		return A_OK;
-    }
+/* ATHENV */
+#ifdef ANDROID_ENV
+    if(wps_enable && (bih->frameType == PROBERESP_FTYPE) )
+        return A_OK;
+#endif
+/* ATHENV */
 
-    bss = wlan_find_node(&wmip->wmi_scan_table, bih->bssid);
     if (bss != NULL) {
         /*
          * Free up the node.  Not the most efficient process given
          * we are about to allocate a new node but it is simple and should be
          * adequate.
          */
+
+        /* In case of hidden AP, beacon will not have ssid,
+         * but a directed probe response will have it,
+         * so cache the probe-resp-ssid if already present. */
+        if (BEACON_FTYPE == bih->frameType)
+        {
+            A_UCHAR *ie_ssid;
+
+            ie_ssid = bss->ni_cie.ie_ssid;
+            if(ie_ssid && (ie_ssid[1] <= IEEE80211_NWID_LEN) && (ie_ssid[2] != 0))
+            {
+                cached_ssid_len = ie_ssid[1];
+                memcpy(cached_ssid_buf, ie_ssid + 2, cached_ssid_len);
+            }
+        }
+
         wlan_node_reclaim(&wmip->wmi_scan_table, bss);
+    }
+
+    /*  beacon/probe response frame format
+     *  [8] time stamp
+     *  [2] beacon interval
+     *  [2] capability information
+     *  [tlv] ssid */
+    beacon_ssid_len = buf[SSID_IE_LEN_INDEX];
+
+    /* If ssid is cached for this hidden AP, then change buffer len accordingly. */
+    if ((BEACON_FTYPE == bih->frameType) &&
+        (0 != cached_ssid_len) &&
+        (0 == beacon_ssid_len || (cached_ssid_len > beacon_ssid_len && 0 == buf[SSID_IE_LEN_INDEX + 1])))
+    {
+        len += (cached_ssid_len - beacon_ssid_len);
     }
 
     bss = wlan_node_alloc(&wmip->wmi_scan_table, len);
@@ -861,7 +1310,42 @@ wmi_bssInfo_event_rx(struct wmi_t *wmip, A_UINT8 *datap, int len)
     bss->ni_snr        = bih->snr;
     bss->ni_rssi       = bih->rssi;
     A_ASSERT(bss->ni_buf != NULL);
-    A_MEMCPY(bss->ni_buf, buf, len);
+
+    /* In case of hidden AP, beacon will not have ssid,
+     * but a directed probe response will have it,
+     * so place the cached-ssid(probe-resp) in the bssinfo. */
+    if ((BEACON_FTYPE == bih->frameType) &&
+         (0 != cached_ssid_len) &&
+         (0 == beacon_ssid_len || (beacon_ssid_len && 0 == buf[SSID_IE_LEN_INDEX + 1])))
+    {
+        A_UINT8 *ni_buf = bss->ni_buf;
+        int buf_len = len;
+
+        /* copy the first 14 bytes such as
+         * time-stamp(8), beacon-interval(2), cap-info(2), ssid-id(1), ssid-len(1). */
+        A_MEMCPY(ni_buf, buf, SSID_IE_LEN_INDEX + 1);
+
+        ni_buf[SSID_IE_LEN_INDEX] = cached_ssid_len;
+        ni_buf += (SSID_IE_LEN_INDEX + 1);
+
+        buf += (SSID_IE_LEN_INDEX + 1);
+        buf_len -= (SSID_IE_LEN_INDEX + 1);
+
+        /* copy the cached ssid */
+        A_MEMCPY(ni_buf, cached_ssid_buf, cached_ssid_len);
+        ni_buf += cached_ssid_len;
+
+        buf += beacon_ssid_len;
+        buf_len -= beacon_ssid_len;
+
+        if (cached_ssid_len > beacon_ssid_len)
+            buf_len -= (cached_ssid_len - beacon_ssid_len);
+
+        /* now copy the rest of bytes */
+        A_MEMCPY(ni_buf, buf, buf_len);
+    }
+    else
+        A_MEMCPY(bss->ni_buf, buf, len);
 
     if (wlan_parse_beacon(bss->ni_buf, len, &bss->ni_cie) != A_OK) {
         wlan_node_free(bss);
@@ -940,7 +1424,7 @@ wmi_pstream_timeout_event_rx(struct wmi_t *wmip, A_UINT8 *datap, int len)
          * thinStreams within this pstream & it got implicitly created due to
          * data flow on this AC. We start the inactivity timer only for
          * implicitly created pstream. Just reset the host state.
-         */
+     */
         /* Set the activeTsids for this AC to 0 */
     LOCK_WMI(wmip);
     wmip->wmi_streamExistsForAC[ev->trafficClass]=0;
@@ -956,17 +1440,21 @@ wmi_pstream_timeout_event_rx(struct wmi_t *wmip, A_UINT8 *datap, int len)
 static A_STATUS
 wmi_bitrate_reply_rx(struct wmi_t *wmip, A_UINT8 *datap, int len)
 {
-    WMI_BIT_RATE_CMD *reply;
+    WMI_BIT_RATE_REPLY *reply;
     A_INT32 rate;
-
-    if (len < sizeof(WMI_BIT_RATE_CMD)) {
+    /* 54149:
+     * WMI_BIT_RATE_CMD structure is changed to WMI_BIT_RATE_REPLY.
+     * since there is difference in the length and to avoid returning
+     * error value.
+     */
+    if (len < sizeof(WMI_BIT_RATE_REPLY)) {
         return A_EINVAL;
     }
-    reply = (WMI_BIT_RATE_CMD *)datap;
+    reply = (WMI_BIT_RATE_REPLY *)datap;
     A_DPRINTF(DBG_WMI,
         (DBGFMT "Enter - rateindex %d\n", DBGARG, reply->rateIndex));
 
-    if (reply->rateIndex == RATE_AUTO) {
+    if (reply->rateIndex == (A_INT8) RATE_AUTO) {
         rate = RATE_AUTO;
     } else {
         rate = wmi_rateTable[(A_UINT32) reply->rateIndex];
@@ -1109,7 +1597,7 @@ wmi_scanComplete_rx(struct wmi_t *wmip, A_UINT8 *datap, int len)
     WMI_SCAN_COMPLETE_EVENT *ev;
 
     ev = (WMI_SCAN_COMPLETE_EVENT *)datap;
-    A_WMI_SCANCOMPLETE_EVENT(wmip->wmi_devt, ev->status);
+    A_WMI_SCANCOMPLETE_EVENT(wmip->wmi_devt, (A_STATUS) ev->status);
 
     return A_OK;
 }
@@ -1164,14 +1652,102 @@ static A_STATUS
 wmi_rssiThresholdEvent_rx(struct wmi_t *wmip, A_UINT8 *datap, int len)
 {
     WMI_RSSI_THRESHOLD_EVENT *reply;
+    WMI_RSSI_THRESHOLD_VAL newThreshold;
+    WMI_RSSI_THRESHOLD_PARAMS_CMD cmd;
+    SQ_THRESHOLD_PARAMS *sq_thresh =
+           &wmip->wmi_SqThresholdParams[SIGNAL_QUALITY_METRICS_RSSI];
+    A_UINT8 upper_rssi_threshold, lower_rssi_threshold;
+    A_INT16 rssi;
 
     if (len < sizeof(*reply)) {
         return A_EINVAL;
     }
     reply = (WMI_RSSI_THRESHOLD_EVENT *)datap;
     A_DPRINTF(DBG_WMI, (DBGFMT "Enter\n", DBGARG));
+    newThreshold = (WMI_RSSI_THRESHOLD_VAL) reply->range;
+    rssi = reply->rssi;
 
-    A_WMI_RSSI_THRESHOLD_EVENT(wmip->wmi_devt, reply->range, reply->rssi);
+    /*
+     * Identify the threshold breached and communicate that to the app. After
+     * that install a new set of thresholds based on the signal quality
+     * reported by the target
+     */
+    if (newThreshold) {
+        /* Upper threshold breached */
+        if (rssi < sq_thresh->upper_threshold[0]) {
+            A_DPRINTF(DBG_WMI, (DBGFMT "Spurious upper RSSI threshold event: "
+                      " %d\n", DBGARG, rssi));
+        } else if ((rssi < sq_thresh->upper_threshold[1]) &&
+                   (rssi >= sq_thresh->upper_threshold[0]))
+        {
+            newThreshold = WMI_RSSI_THRESHOLD1_ABOVE;
+        } else if ((rssi < sq_thresh->upper_threshold[2]) &&
+                   (rssi >= sq_thresh->upper_threshold[1]))
+        {
+            newThreshold = WMI_RSSI_THRESHOLD2_ABOVE;
+        } else if ((rssi < sq_thresh->upper_threshold[3]) &&
+                   (rssi >= sq_thresh->upper_threshold[2]))
+        {
+            newThreshold = WMI_RSSI_THRESHOLD3_ABOVE;
+        } else if ((rssi < sq_thresh->upper_threshold[4]) &&
+                   (rssi >= sq_thresh->upper_threshold[3]))
+        {
+            newThreshold = WMI_RSSI_THRESHOLD4_ABOVE;
+        } else if ((rssi < sq_thresh->upper_threshold[5]) &&
+                   (rssi >= sq_thresh->upper_threshold[4]))
+        {
+            newThreshold = WMI_RSSI_THRESHOLD5_ABOVE;
+        } else if (rssi >= sq_thresh->upper_threshold[5]) {
+            newThreshold = WMI_RSSI_THRESHOLD6_ABOVE;
+        }
+    } else {
+        /* Lower threshold breached */
+        if (rssi > sq_thresh->lower_threshold[0]) {
+            A_DPRINTF(DBG_WMI, (DBGFMT "Spurious lower RSSI threshold event: "
+                      "%d %d\n", DBGARG, rssi, sq_thresh->lower_threshold[0]));
+        } else if ((rssi > sq_thresh->lower_threshold[1]) &&
+                   (rssi <= sq_thresh->lower_threshold[0]))
+        {
+            newThreshold = WMI_RSSI_THRESHOLD6_BELOW;
+        } else if ((rssi > sq_thresh->lower_threshold[2]) &&
+                   (rssi <= sq_thresh->lower_threshold[1]))
+        {
+            newThreshold = WMI_RSSI_THRESHOLD5_BELOW;
+        } else if ((rssi > sq_thresh->lower_threshold[3]) &&
+                   (rssi <= sq_thresh->lower_threshold[2]))
+        {
+            newThreshold = WMI_RSSI_THRESHOLD4_BELOW;
+        } else if ((rssi > sq_thresh->lower_threshold[4]) &&
+                   (rssi <= sq_thresh->lower_threshold[3]))
+        {
+            newThreshold = WMI_RSSI_THRESHOLD3_BELOW;
+        } else if ((rssi > sq_thresh->lower_threshold[5]) &&
+                   (rssi <= sq_thresh->lower_threshold[4]))
+        {
+            newThreshold = WMI_RSSI_THRESHOLD2_BELOW;
+        } else if (rssi <= sq_thresh->lower_threshold[5]) {
+            newThreshold = WMI_RSSI_THRESHOLD1_BELOW;
+        }
+    }
+    /* Calculate and install the next set of thresholds */
+    lower_rssi_threshold = ar6000_get_lower_threshold(rssi, sq_thresh,
+                                      sq_thresh->lower_threshold_valid_count);
+    upper_rssi_threshold = ar6000_get_upper_threshold(rssi, sq_thresh,
+                                      sq_thresh->upper_threshold_valid_count);
+    /* Issue a wmi command to install the thresholds */
+    cmd.thresholdAbove1_Val = upper_rssi_threshold;
+    cmd.thresholdBelow1_Val = lower_rssi_threshold;
+    cmd.weight = sq_thresh->weight;
+    cmd.pollTime = sq_thresh->polling_interval;
+
+    rssi_event_value = rssi;
+
+    if (wmi_send_rssi_threshold_params(wmip, &cmd) != A_OK) {
+        A_DPRINTF(DBG_WMI, (DBGFMT "Unable to configure the RSSI thresholds\n",
+                  DBGARG));
+    }
+
+    A_WMI_RSSI_THRESHOLD_EVENT(wmip->wmi_devt, newThreshold, reply->rssi);
 
     return A_OK;
 }
@@ -1188,7 +1764,7 @@ wmi_reportErrorEvent_rx(struct wmi_t *wmip, A_UINT8 *datap, int len)
     reply = (WMI_TARGET_ERROR_REPORT_EVENT *)datap;
     A_DPRINTF(DBG_WMI, (DBGFMT "Enter\n", DBGARG));
 
-    A_WMI_REPORT_ERROR_EVENT(wmip->wmi_devt, reply->errorVal);
+    A_WMI_REPORT_ERROR_EVENT(wmip->wmi_devt, (WMI_TARGET_ERROR_VAL) reply->errorVal);
 
     return A_OK;
 }
@@ -1197,16 +1773,62 @@ static A_STATUS
 wmi_cac_event_rx(struct wmi_t *wmip, A_UINT8 *datap, int len)
 {
     WMI_CAC_EVENT *reply;
+    WMM_TSPEC_IE *tspec_ie;
 
     if (len < sizeof(*reply)) {
         return A_EINVAL;
     }
     reply = (WMI_CAC_EVENT *)datap;
+
     A_DPRINTF(DBG_WMI, (DBGFMT "Enter\n", DBGARG));
+
+    if ((reply->cac_indication == CAC_INDICATION_ADMISSION_RESP) &&
+        (reply->statusCode != TSPEC_STATUS_CODE_ADMISSION_ACCEPTED)) {
+        tspec_ie = (WMM_TSPEC_IE *) &(reply->tspecSuggestion);
+
+        wmi_delete_pstream_cmd(wmip, reply->ac,
+                (tspec_ie->tsInfo_info >> TSPEC_TSID_S) & TSPEC_TSID_MASK);
+    }
+    else if (reply->cac_indication == CAC_INDICATION_NO_RESP) {
+        A_UINT16 activeTsids;
+        A_UINT8 i;
+
+        /* following assumes that there is only one outstanding ADDTS request
+           when this event is received */
+        LOCK_WMI(wmip);
+        activeTsids = wmip->wmi_streamExistsForAC[reply->ac];
+        UNLOCK_WMI(wmip);
+
+        for (i = 0; i < sizeof(activeTsids) * 8; i++) {
+            if ((activeTsids >> i) & 1) {
+                break;
+            }
+        }
+        if (i < (sizeof(activeTsids) * 8)) {
+            wmi_delete_pstream_cmd(wmip, reply->ac, i);
+        }
+    }
 
     A_WMI_CAC_EVENT(wmip->wmi_devt, reply->ac,
                 reply->cac_indication, reply->statusCode,
                 reply->tspecSuggestion);
+
+    return A_OK;
+}
+
+static A_STATUS
+wmi_channel_change_event_rx(struct wmi_t *wmip, A_UINT8 *datap, int len)
+{
+    WMI_CHANNEL_CHANGE_EVENT *reply;
+
+    if (len < sizeof(*reply)) {
+        return A_EINVAL;
+    }
+    reply = (WMI_CHANNEL_CHANGE_EVENT *)datap;
+    A_DPRINTF(DBG_WMI, (DBGFMT "Enter\n", DBGARG));
+
+    A_WMI_CHANNEL_CHANGE_EVENT(wmip->wmi_devt, reply->oldChannel,
+                               reply->newChannel);
 
     return A_OK;
 }
@@ -1262,12 +1884,9 @@ wmi_roam_data_event_rx(struct wmi_t *wmip, A_UINT8 *datap, int len)
 static A_STATUS
 wmi_txRetryErrEvent_rx(struct wmi_t *wmip, A_UINT8 *datap, int len)
 {
-    WMI_TX_RETRY_ERR_EVENT *reply;
-
-    if (len < sizeof(*reply)) {
+    if (len < sizeof(WMI_TX_RETRY_ERR_EVENT)) {
         return A_EINVAL;
     }
-    reply = (WMI_TX_RETRY_ERR_EVENT *)datap;
     A_DPRINTF(DBG_WMI, (DBGFMT "Enter\n", DBGARG));
 
     A_WMI_TX_RETRY_ERR_EVENT(wmip->wmi_devt);
@@ -1279,6 +1898,12 @@ static A_STATUS
 wmi_snrThresholdEvent_rx(struct wmi_t *wmip, A_UINT8 *datap, int len)
 {
     WMI_SNR_THRESHOLD_EVENT *reply;
+    SQ_THRESHOLD_PARAMS *sq_thresh =
+           &wmip->wmi_SqThresholdParams[SIGNAL_QUALITY_METRICS_SNR];
+    WMI_SNR_THRESHOLD_VAL newThreshold;
+    WMI_SNR_THRESHOLD_PARAMS_CMD cmd;
+    A_UINT8 upper_snr_threshold, lower_snr_threshold;
+    A_INT16 snr;
 
     if (len < sizeof(*reply)) {
         return A_EINVAL;
@@ -1286,7 +1911,78 @@ wmi_snrThresholdEvent_rx(struct wmi_t *wmip, A_UINT8 *datap, int len)
     reply = (WMI_SNR_THRESHOLD_EVENT *)datap;
     A_DPRINTF(DBG_WMI, (DBGFMT "Enter\n", DBGARG));
 
-    A_WMI_SNR_THRESHOLD_EVENT_RX(wmip->wmi_devt, reply->range, reply->snr);
+    newThreshold = (WMI_SNR_THRESHOLD_VAL) reply->range;
+    snr = reply->snr;
+    /*
+     * Identify the threshold breached and communicate that to the app. After
+     * that install a new set of thresholds based on the signal quality
+     * reported by the target
+     */
+    if (newThreshold) {
+        /* Upper threshold breached */
+        if (snr < sq_thresh->upper_threshold[0]) {
+            A_DPRINTF(DBG_WMI, (DBGFMT "Spurious upper SNR threshold event: "
+                     "%d\n", DBGARG, snr));
+        } else if ((snr < sq_thresh->upper_threshold[1]) &&
+                   (snr >= sq_thresh->upper_threshold[0]))
+        {
+            newThreshold = WMI_SNR_THRESHOLD1_ABOVE;
+        } else if ((snr < sq_thresh->upper_threshold[2]) &&
+                   (snr >= sq_thresh->upper_threshold[1]))
+        {
+            newThreshold = WMI_SNR_THRESHOLD2_ABOVE;
+        } else if ((snr < sq_thresh->upper_threshold[3]) &&
+                   (snr >= sq_thresh->upper_threshold[2]))
+        {
+            newThreshold = WMI_SNR_THRESHOLD3_ABOVE;
+        } else if (snr >= sq_thresh->upper_threshold[3]) {
+            newThreshold = WMI_SNR_THRESHOLD4_ABOVE;
+        }
+    } else {
+        /* Lower threshold breached */
+        if (snr > sq_thresh->lower_threshold[0]) {
+            A_DPRINTF(DBG_WMI, (DBGFMT "Spurious lower SNR threshold event: "
+                      "%d %d\n", DBGARG, snr, sq_thresh->lower_threshold[0]));
+        } else if ((snr > sq_thresh->lower_threshold[1]) &&
+                   (snr <= sq_thresh->lower_threshold[0]))
+        {
+            newThreshold = WMI_SNR_THRESHOLD4_BELOW;
+        } else if ((snr > sq_thresh->lower_threshold[2]) &&
+                   (snr <= sq_thresh->lower_threshold[1]))
+        {
+            newThreshold = WMI_SNR_THRESHOLD3_BELOW;
+        } else if ((snr > sq_thresh->lower_threshold[3]) &&
+                   (snr <= sq_thresh->lower_threshold[2]))
+        {
+            newThreshold = WMI_SNR_THRESHOLD2_BELOW;
+        } else if (snr <= sq_thresh->lower_threshold[3]) {
+            newThreshold = WMI_SNR_THRESHOLD1_BELOW;
+        }
+    }
+
+    /* Calculate and install the next set of thresholds */
+    lower_snr_threshold = ar6000_get_lower_threshold(snr, sq_thresh,
+                                      sq_thresh->lower_threshold_valid_count);
+    upper_snr_threshold = ar6000_get_upper_threshold(snr, sq_thresh,
+                                      sq_thresh->upper_threshold_valid_count);
+
+    /* Issue a wmi command to install the thresholds */
+    cmd.thresholdAbove1_Val = upper_snr_threshold;
+    cmd.thresholdBelow1_Val = lower_snr_threshold;
+    cmd.weight = sq_thresh->weight;
+    cmd.pollTime = sq_thresh->polling_interval;
+
+    A_DPRINTF(DBG_WMI, (DBGFMT "snr: %d, threshold: %d, lower: %d, upper: %d\n"
+              ,DBGARG, snr, newThreshold, lower_snr_threshold,
+              upper_snr_threshold));
+
+    snr_event_value = snr;
+
+    if (wmi_send_snr_threshold_params(wmip, &cmd) != A_OK) {
+        A_DPRINTF(DBG_WMI, (DBGFMT "Unable to configure the SNR thresholds\n",
+                  DBGARG));
+    }
+    A_WMI_SNR_THRESHOLD_EVENT_RX(wmip->wmi_devt, newThreshold, reply->snr);
 
     return A_OK;
 }
@@ -1302,7 +1998,9 @@ wmi_lqThresholdEvent_rx(struct wmi_t *wmip, A_UINT8 *datap, int len)
     reply = (WMI_LQ_THRESHOLD_EVENT *)datap;
     A_DPRINTF(DBG_WMI, (DBGFMT "Enter\n", DBGARG));
 
-    A_WMI_LQ_THRESHOLD_EVENT_RX(wmip->wmi_devt, reply->range, reply->lq);
+    A_WMI_LQ_THRESHOLD_EVENT_RX(wmip->wmi_devt,
+                                (WMI_LQ_THRESHOLD_VAL) reply->range,
+                                reply->lq);
 
     return A_OK;
 }
@@ -1356,7 +2054,9 @@ wmi_dbglog_event_rx(struct wmi_t *wmip, A_UINT8 *datap, int len)
     dropped = *((A_UINT32 *)datap);
     datap += sizeof(dropped);
     len -= sizeof(dropped);
-    A_WMI_DBGLOG_EVENT(wmip->wmi_devt, dropped, datap, len);
+/* WIFI module porting, hanshirong, begin */
+    //A_WMI_DBGLOG_EVENT(wmip->wmi_devt, dropped, datap, len);
+/* WIFI module porting, hanshirong, end */
     return A_OK;
 }
 
@@ -1408,9 +2108,9 @@ A_STATUS
 wmi_cmd_send(struct wmi_t *wmip, void *osbuf, WMI_COMMAND_ID cmdId,
                WMI_SYNC_FLAG syncflag)
 {
-#define IS_LONG_CMD(cmdId) ((cmdId == WMI_OPT_TX_FRAME_CMDID) || (cmdId == WMI_ADD_WOW_PATTERN_CMDID))
+#define IS_OPT_TX_CMD(cmdId) ((cmdId == WMI_OPT_TX_FRAME_CMDID))
     WMI_CMD_HDR         *cHdr;
-    WMI_PRI_STREAM_ID   streamID = WMI_CONTROL_PRI;
+    HTC_ENDPOINT_ID     eid  = wmip->wmi_endpoint_id;
 
     A_ASSERT(osbuf != NULL);
 
@@ -1431,17 +2131,16 @@ wmi_cmd_send(struct wmi_t *wmip, void *osbuf, WMI_COMMAND_ID cmdId,
     }
 
     cHdr = (WMI_CMD_HDR *)A_NETBUF_DATA(osbuf);
-    cHdr->commandId = cmdId;
+    cHdr->commandId = (A_UINT16) cmdId;
 
     /*
-     * Send cmd, some via control pipe, others via data pipe
+     * Only for OPT_TX_CMD, use BE endpoint.
      */
-    if (IS_LONG_CMD(cmdId)) {
-        wmi_data_hdr_add(wmip, osbuf, CNTL_MSGTYPE);
-        // TODO ... these can now go through the control endpoint via HTC 2.0
-        streamID = WMI_BEST_EFFORT_PRI;
+    if (IS_OPT_TX_CMD(cmdId)) {
+        wmi_data_hdr_add(wmip, osbuf, OPT_MSGTYPE, FALSE);
+        eid = A_WMI_Ac2EndpointID(wmip->wmi_devt, WMM_AC_BE);
     }
-    A_WMI_CONTROL_TX(wmip->wmi_devt, osbuf, streamID);
+    A_WMI_CONTROL_TX(wmip->wmi_devt, osbuf, eid);
 
     if ((syncflag == SYNC_AFTER_WMIFLAG) || (syncflag == SYNC_BOTH_WMIFLAG)) {
         /*
@@ -1451,11 +2150,11 @@ wmi_cmd_send(struct wmi_t *wmip, void *osbuf, WMI_COMMAND_ID cmdId,
         wmi_sync_point(wmip);
     }
     return (A_OK);
-#undef IS_LONG_CMD
+#undef IS_OPT_TX_CMD
 }
 
 A_STATUS
-wmi_cmd_send_xtnd(struct wmi_t *wmip, void *osbuf, WMI_COMMAND_ID cmdId,
+wmi_cmd_send_xtnd(struct wmi_t *wmip, void *osbuf, WMIX_COMMAND_ID cmdId,
                   WMI_SYNC_FLAG syncflag)
 {
     WMIX_CMD_HDR     *cHdr;
@@ -1465,7 +2164,7 @@ wmi_cmd_send_xtnd(struct wmi_t *wmip, void *osbuf, WMI_COMMAND_ID cmdId,
     }
 
     cHdr = (WMIX_CMD_HDR *)A_NETBUF_DATA(osbuf);
-    cHdr->commandId = cmdId;
+    cHdr->commandId = (A_UINT32) cmdId;
 
     return wmi_cmd_send(wmip, osbuf, WMI_EXTENSION_CMDID, syncflag);
 }
@@ -1474,7 +2173,7 @@ A_STATUS
 wmi_connect_cmd(struct wmi_t *wmip, NETWORK_TYPE netType,
                 DOT11_AUTH_MODE dot11AuthMode, AUTH_MODE authMode,
                 CRYPTO_TYPE pairwiseCrypto, A_UINT8 pairwiseCryptoLen,
-                CRYPTO_TYPE groupCrypto,A_UINT8 groupCryptoLen,
+                CRYPTO_TYPE groupCrypto, A_UINT8 groupCryptoLen,
                 int ssidLength, A_UCHAR *ssid,
                 A_UINT8 *bssid, A_UINT16 channel, A_UINT32 ctrl_flags)
 {
@@ -1498,7 +2197,11 @@ wmi_connect_cmd(struct wmi_t *wmip, NETWORK_TYPE netType,
     cc = (WMI_CONNECT_CMD *)(A_NETBUF_DATA(osbuf));
     A_MEMZERO(cc, sizeof(*cc));
 
-    A_MEMCPY(cc->ssid, ssid, ssidLength);
+    if (ssidLength)
+    {
+        A_MEMCPY(cc->ssid, ssid, ssidLength);
+    }
+
     cc->ssidLength          = ssidLength;
     cc->networkType         = netType;
     cc->dot11AuthMode       = dot11AuthMode;
@@ -1516,6 +2219,9 @@ wmi_connect_cmd(struct wmi_t *wmip, NETWORK_TYPE netType,
     if (wmi_set_keepalive_cmd(wmip, wmip->wmi_keepaliveInterval) != A_OK) {
         return(A_ERROR);
     }
+
+    wmip->wmi_pair_crypto_type  = pairwiseCrypto;
+    wmip->wmi_grp_crypto_type   = groupCrypto;
 
     return (wmi_cmd_send(wmip, osbuf, WMI_CONNECT_CMDID, NO_SYNC_WMIFLAG));
 }
@@ -1548,18 +2254,11 @@ wmi_reconnect_cmd(struct wmi_t *wmip, A_UINT8 *bssid, A_UINT16 channel)
 A_STATUS
 wmi_disconnect_cmd(struct wmi_t *wmip)
 {
-    void *osbuf;
     A_STATUS status;
-
-    osbuf = A_NETBUF_ALLOC(0);      /* no payload */
-    if (osbuf == NULL) {
-        return A_NO_MEMORY;
-    }
 
     /* Bug fix for 24817(elevator bug) - the disconnect command does not
        need to do a SYNC before.*/
-    status = (wmi_cmd_send(wmip, osbuf, WMI_DISCONNECT_CMDID,
-                         NO_SYNC_WMIFLAG));
+    status = wmi_simple_cmd(wmip, WMI_DISCONNECT_CMDID);
 
     return status;
 }
@@ -1567,21 +2266,32 @@ wmi_disconnect_cmd(struct wmi_t *wmip)
 A_STATUS
 wmi_startscan_cmd(struct wmi_t *wmip, WMI_SCAN_TYPE scanType,
                   A_BOOL forceFgScan, A_BOOL isLegacy,
-                  A_UINT32 homeDwellTime, A_UINT32 forceScanInterval)
+                  A_UINT32 homeDwellTime, A_UINT32 forceScanInterval,
+                  A_INT8 numChan, A_UINT16 *channelList)
 {
     void *osbuf;
     WMI_START_SCAN_CMD *sc;
+    A_INT8 size;
+
+    size = sizeof (*sc);
 
     if ((scanType != WMI_LONG_SCAN) && (scanType != WMI_SHORT_SCAN)) {
         return A_EINVAL;
     }
 
-    osbuf = A_NETBUF_ALLOC(sizeof(*sc));
+    if (numChan) {
+        if (numChan > WMI_MAX_CHANNELS) {
+            return A_EINVAL;
+        }
+        size += sizeof(A_UINT16) * (numChan - 1);
+    }
+
+    osbuf = A_NETBUF_ALLOC(size);
     if (osbuf == NULL) {
         return A_NO_MEMORY;
     }
 
-    A_NETBUF_PUT(osbuf, sizeof(*sc));
+    A_NETBUF_PUT(osbuf, size);
 
     sc = (WMI_START_SCAN_CMD *)(A_NETBUF_DATA(osbuf));
     sc->scanType = scanType;
@@ -1589,6 +2299,10 @@ wmi_startscan_cmd(struct wmi_t *wmip, WMI_SCAN_TYPE scanType,
     sc->isLegacy = isLegacy;
     sc->homeDwellTime = homeDwellTime;
     sc->forceScanInterval = forceScanInterval;
+    sc->numChannels = numChan;
+    if (numChan) {
+        A_MEMCPY(sc->channelList, channelList, numChan * sizeof(A_UINT16));
+    }
 
     return (wmi_cmd_send(wmip, osbuf, WMI_START_SCAN_CMDID, NO_SYNC_WMIFLAG));
 }
@@ -1599,7 +2313,7 @@ wmi_scanparams_cmd(struct wmi_t *wmip, A_UINT16 fg_start_sec,
                    A_UINT16 minact_chdw_msec, A_UINT16 maxact_chdw_msec,
                    A_UINT16 pas_chdw_msec,
                    A_UINT8 shScanRatio, A_UINT8 scanCtrlFlags,
-                   A_UINT32 max_dfsch_act_time)
+                   A_UINT32 max_dfsch_act_time, A_UINT16 maxact_scan_per_ssid)
 {
     void *osbuf;
     WMI_SCAN_PARAMS_CMD *sc;
@@ -1622,6 +2336,7 @@ wmi_scanparams_cmd(struct wmi_t *wmip, A_UINT16 fg_start_sec,
     sc->shortScanRatio   = shScanRatio;
     sc->scanCtrlFlags    = scanCtrlFlags;
     sc->max_dfsch_act_time = max_dfsch_act_time;
+    sc->maxact_scan_per_ssid = maxact_scan_per_ssid;
 
     return (wmi_cmd_send(wmip, osbuf, WMI_SET_SCAN_PARAMS_CMDID,
                          NO_SYNC_WMIFLAG));
@@ -1856,7 +2571,7 @@ wmi_disctimeout_cmd(struct wmi_t *wmip, A_UINT8 timeout)
 A_STATUS
 wmi_addKey_cmd(struct wmi_t *wmip, A_UINT8 keyIndex, CRYPTO_TYPE keyType,
                A_UINT8 keyUsage, A_UINT8 keyLength, A_UINT8 *keyRSC,
-               A_UINT8 *keyMaterial, A_UINT8 key_op_ctrl,
+               A_UINT8 *keyMaterial, A_UINT8 key_op_ctrl, A_UINT8 *macAddr,
                WMI_SYNC_FLAG sync_flag)
 {
     void *osbuf;
@@ -1886,10 +2601,22 @@ wmi_addKey_cmd(struct wmi_t *wmip, A_UINT8 keyIndex, CRYPTO_TYPE keyType,
     cmd->keyUsage = keyUsage;
     cmd->keyLength = keyLength;
     A_MEMCPY(cmd->key, keyMaterial, keyLength);
-    if (NULL != keyRSC) {
+
+    if ((NULL != keyRSC)
+/*BU5D02447,WIFI Module,hanshirong 66539,20100204 begin++ */
+#ifdef WAPI_ENABLE
+    && (key_op_ctrl != KEY_OP_INIT_WAPIPN)
+#endif /* WAPI_ENABLE */
+/*BU5D02447,WIFI Module,hanshirong 66539,20100204 end-- */
+    )
+    {
         A_MEMCPY(cmd->keyRSC, keyRSC, sizeof(cmd->keyRSC));
     }
     cmd->key_op_ctrl = key_op_ctrl;
+
+    if(macAddr) {
+        A_MEMCPY(cmd->key_macaddr,macAddr,IEEE80211_ADDR_LEN);
+    }
 
     return (wmi_cmd_send(wmip, osbuf, WMI_ADD_CIPHER_KEY_CMDID, sync_flag));
 }
@@ -1918,15 +2645,7 @@ wmi_add_krk_cmd(struct wmi_t *wmip, A_UINT8 *krk)
 A_STATUS
 wmi_delete_krk_cmd(struct wmi_t *wmip)
 {
-    void *osbuf;
-
-    osbuf = A_NETBUF_ALLOC(0);
-
-    if (osbuf == NULL) {
-        return A_NO_MEMORY;
-    }
-
-    return (wmi_cmd_send(wmip, osbuf, WMI_DELETE_KRK_CMDID, NO_SYNC_WMIFLAG));
+    return wmi_simple_cmd(wmip, WMI_DELETE_KRK_CMDID);
 }
 
 A_STATUS
@@ -2063,23 +2782,15 @@ wmi_set_pmkid_list_cmd(struct wmi_t *wmip,
 A_STATUS
 wmi_get_pmkid_list_cmd(struct wmi_t *wmip)
 {
-    void *osbuf;
-
-    osbuf = A_NETBUF_ALLOC(0);      /* no payload */
-    if (osbuf == NULL) {
-        return A_NO_MEMORY;
-    }
-
-    return (wmi_cmd_send(wmip, osbuf, WMI_GET_PMKID_LIST_CMDID,
-                         NO_SYNC_WMIFLAG));
+    return wmi_simple_cmd(wmip, WMI_GET_PMKID_LIST_CMDID);
 }
 
 A_STATUS
-wmi_dataSync_send(struct wmi_t *wmip, void *osbuf, WMI_PRI_STREAM_ID streamID)
+wmi_dataSync_send(struct wmi_t *wmip, void *osbuf, HTC_ENDPOINT_ID eid)
 {
     WMI_DATA_HDR     *dtHdr;
 
-    A_ASSERT(streamID != WMI_CONTROL_PRI);
+    A_ASSERT( eid != wmip->wmi_endpoint_id);
     A_ASSERT(osbuf != NULL);
 
     if (A_NETBUF_PUSH(osbuf, sizeof(WMI_DATA_HDR)) != A_OK) {
@@ -2090,9 +2801,9 @@ wmi_dataSync_send(struct wmi_t *wmip, void *osbuf, WMI_PRI_STREAM_ID streamID)
     dtHdr->info =
       (SYNC_MSGTYPE & WMI_DATA_HDR_MSG_TYPE_MASK) << WMI_DATA_HDR_MSG_TYPE_SHIFT;
 
-    A_DPRINTF(DBG_WMI, (DBGFMT "Enter - streamID %d\n", DBGARG, streamID));
+    A_DPRINTF(DBG_WMI, (DBGFMT "Enter - eid %d\n", DBGARG, eid));
 
-    return (A_WMI_CONTROL_TX(wmip->wmi_devt, osbuf, streamID));
+    return (A_WMI_CONTROL_TX(wmip->wmi_devt, osbuf, eid));
 }
 
 typedef struct _WMI_DATA_SYNC_BUFS {
@@ -2103,12 +2814,13 @@ typedef struct _WMI_DATA_SYNC_BUFS {
 static A_STATUS
 wmi_sync_point(struct wmi_t *wmip)
 {
-	void *cmd_osbuf;
+    void *cmd_osbuf;
+    WMI_SYNC_CMD *cmd;
     WMI_DATA_SYNC_BUFS dataSyncBufs[WMM_NUM_AC];
-	A_UINT8 i,numPriStreams=0;
-	A_STATUS status;
+    A_UINT8 i,numPriStreams=0;
+    A_STATUS status = A_OK;
 
-	A_DPRINTF(DBG_WMI, (DBGFMT "Enter\n", DBGARG));
+    A_DPRINTF(DBG_WMI, (DBGFMT "Enter\n", DBGARG));
 
     memset(dataSyncBufs,0,sizeof(dataSyncBufs));
 
@@ -2116,7 +2828,7 @@ wmi_sync_point(struct wmi_t *wmip)
     LOCK_WMI(wmip);
 
     for (i=0; i < WMM_NUM_AC ; i++) {
-		if (wmip->wmi_fatPipeExists & (1 << i)) {
+        if (wmip->wmi_fatPipeExists & (1 << i)) {
             numPriStreams++;
             dataSyncBufs[numPriStreams-1].trafficClass = i;
         }
@@ -2127,42 +2839,62 @@ wmi_sync_point(struct wmi_t *wmip)
     /* dataSyncBufs is now filled with entries (starting at index 0) containing valid streamIDs */
 
     do {
-	    /*
-	     * We allocate all network buffers needed so we will be able to
-	     * send all required frames.
-	     */
-	    cmd_osbuf = A_NETBUF_ALLOC(0);      /* no payload */
-	    if (cmd_osbuf == NULL) {
-		    status = A_NO_MEMORY;
+        /*
+         * We allocate all network buffers needed so we will be able to
+         * send all required frames.
+         */
+        cmd_osbuf = A_NETBUF_ALLOC(sizeof(*cmd));
+        if (cmd_osbuf == NULL) {
+            status = A_NO_MEMORY;
             break;
-	    }
+    }
 
-	    for (i=0; i < numPriStreams ; i++) {
-	        dataSyncBufs[i].osbuf = A_NETBUF_ALLOC(0);
+        A_NETBUF_PUT(cmd_osbuf, sizeof(*cmd));
+
+        cmd = (WMI_SYNC_CMD *)(A_NETBUF_DATA(cmd_osbuf));
+        A_MEMZERO(cmd, sizeof(*cmd));
+
+        /* In the SYNC cmd sent on the control Ep, send a bitmap of the data
+         * eps on which the Data Sync will be sent
+         */
+        cmd->dataSyncMap = wmip->wmi_fatPipeExists;
+
+        for (i=0; i < numPriStreams ; i++) {
+            dataSyncBufs[i].osbuf = A_NETBUF_ALLOC(0);
             if (dataSyncBufs[i].osbuf == NULL) {
                 status = A_NO_MEMORY;
                 break;
             }
-	    } //end for
+        } //end for
 
-	    /*
-	     * Send sync cmd followed by sync data messages on all endpoints being
-	     * used
-	     */
-	    status = wmi_cmd_send(wmip, cmd_osbuf, WMI_SYNCHRONIZE_CMDID,
-						  NO_SYNC_WMIFLAG);
-
+        /* if Buffer allocation for any of the dataSync fails, then do not
+         * send the Synchronize cmd on the control ep
+         */
         if (A_FAILED(status)) {
             break;
         }
+
+    /*
+     * Send sync cmd followed by sync data messages on all endpoints being
+     * used
+     */
+    status = wmi_cmd_send(wmip, cmd_osbuf, WMI_SYNCHRONIZE_CMDID,
+                          NO_SYNC_WMIFLAG);
+
+        if (A_FAILED(status)) {
+            break;
+    }
             /* cmd buffer sent, we no longer own it */
         cmd_osbuf = NULL;
 
-		for(i=0; i < numPriStreams; i++) {
+        for(i=0; i < numPriStreams; i++) {
             A_ASSERT(dataSyncBufs[i].osbuf != NULL);
-
-            status = wmi_dataSync_send(wmip, dataSyncBufs[i].osbuf,
-                        WMI_ACCESSCATEGORY_WMISTREAM(wmip,dataSyncBufs[i].trafficClass));
+            status = wmi_dataSync_send(wmip,
+                                       dataSyncBufs[i].osbuf,
+                                       A_WMI_Ac2EndpointID(wmip->wmi_devt,
+                                                            dataSyncBufs[i].
+                                                            trafficClass)
+                                      );
 
             if (A_FAILED(status)) {
                 break;
@@ -2170,7 +2902,7 @@ wmi_sync_point(struct wmi_t *wmip)
             /* we don't own this buffer anymore, NULL it out of the array so it
              * won't get cleaned up */
             dataSyncBufs[i].osbuf = NULL;
-		} //end for
+        } //end for
 
     } while(FALSE);
 
@@ -2178,7 +2910,7 @@ wmi_sync_point(struct wmi_t *wmip)
 
     if (cmd_osbuf != NULL) {
         A_NETBUF_FREE(cmd_osbuf);
-    }
+            }
 
     for (i = 0; i < numPriStreams; i++) {
         if (dataSyncBufs[i].osbuf != NULL) {
@@ -2186,7 +2918,7 @@ wmi_sync_point(struct wmi_t *wmip)
         }
     }
 
-	return (status);
+    return (status);
 }
 
 A_STATUS
@@ -2194,8 +2926,9 @@ wmi_create_pstream_cmd(struct wmi_t *wmip, WMI_CREATE_PSTREAM_CMD *params)
 {
     void *osbuf;
     WMI_CREATE_PSTREAM_CMD *cmd;
-	A_UINT16 activeTsids=0;
     A_UINT8 fatPipeExistsForAC=0;
+    A_INT32 minimalPHY = 0;
+    A_INT32 nominalPHY = 0;
 
     /* Validate all the parameters. */
     if( !((params->userPriority < 8) &&
@@ -2214,6 +2947,30 @@ wmi_create_pstream_cmd(struct wmi_t *wmip, WMI_CREATE_PSTREAM_CMD *params)
         return  A_EINVAL;
     }
 
+    //
+    // check nominal PHY rate is >= minimalPHY, so that DUT
+    // can allow TSRS IE
+    //
+
+    // get the physical rate
+    minimalPHY = ((params->minPhyRate / 1000)/1000); // unit of bps
+
+    // check minimal phy < nominal phy rate
+    //
+    if (params->nominalPHY >= minimalPHY)
+    {
+        nominalPHY = (params->nominalPHY * 1000)/500; // unit of 500 kbps
+        A_DPRINTF(DBG_WMI,
+                  (DBGFMT "TSRS IE Enabled::MinPhy %x->NominalPhy ===> %x\n", DBGARG,
+                  minimalPHY, nominalPHY));
+
+        params->nominalPHY = nominalPHY;
+    }
+    else
+    {
+        params->nominalPHY = 0;
+    }
+
     osbuf = A_NETBUF_ALLOC(sizeof(*cmd));
     if (osbuf == NULL) {
         return A_NO_MEMORY;
@@ -2230,22 +2987,21 @@ wmi_create_pstream_cmd(struct wmi_t *wmip, WMI_CREATE_PSTREAM_CMD *params)
     A_MEMCPY(cmd, params, sizeof(*cmd));
 
         /* this is an implicitly created Fat pipe */
-    if (params->tsid == WMI_IMPLICIT_PSTREAM) {
+    if ((A_UINT32)params->tsid == (A_UINT32)WMI_IMPLICIT_PSTREAM) {
         LOCK_WMI(wmip);
         fatPipeExistsForAC = (wmip->wmi_fatPipeExists & (1 << params->trafficClass));
         wmip->wmi_fatPipeExists |= (1<<params->trafficClass);
         UNLOCK_WMI(wmip);
     } else {
             /* this is an explicitly created thin stream within a fat pipe */
-        LOCK_WMI(wmip);
+    LOCK_WMI(wmip);
         fatPipeExistsForAC = (wmip->wmi_fatPipeExists & (1 << params->trafficClass));
-        activeTsids = wmip->wmi_streamExistsForAC[params->trafficClass];
-        wmip->wmi_streamExistsForAC[params->trafficClass] |= (1<<params->tsid);
+    wmip->wmi_streamExistsForAC[params->trafficClass] |= (1<<params->tsid);
             /* if a thinstream becomes active, the fat pipe automatically
             * becomes active
             */
         wmip->wmi_fatPipeExists |= (1<<params->trafficClass);
-        UNLOCK_WMI(wmip);
+    UNLOCK_WMI(wmip);
     }
 
         /* Indicate activty change to driver layer only if this is the
@@ -2267,7 +3023,13 @@ wmi_delete_pstream_cmd(struct wmi_t *wmip, A_UINT8 trafficClass, A_UINT8 tsid)
     void *osbuf;
     WMI_DELETE_PSTREAM_CMD *cmd;
     A_STATUS status;
-	A_UINT16 activeTsids=0;
+    A_UINT16 activeTsids=0;
+
+    /* validate the parameters */
+    if (trafficClass > 3) {
+        A_DPRINTF(DBG_WMI, (DBGFMT "Invalid trafficClass: %d\n", DBGARG, trafficClass));
+        return A_EINVAL;
+    }
 
     osbuf = A_NETBUF_ALLOC(sizeof(*cmd));
     if (osbuf == NULL) {
@@ -2318,26 +3080,77 @@ wmi_delete_pstream_cmd(struct wmi_t *wmip, A_UINT8 trafficClass, A_UINT8 tsid)
     return status;
 }
 
+A_STATUS
+wmi_set_framerate_cmd(struct wmi_t *wmip, A_UINT8 bEnable, A_UINT8 type, A_UINT8 subType, A_UINT16 rateMask)
+{
+    void *osbuf;
+    WMI_FRAME_RATES_CMD *cmd;
+    A_UINT8 frameType;
+
+    A_DPRINTF(DBG_WMI,
+        (DBGFMT " type %02X, subType %02X, rateMask %04x\n", DBGARG, type, subType, rateMask));
+
+    if((type != IEEE80211_FRAME_TYPE_MGT && type != IEEE80211_FRAME_TYPE_CTL) ||
+        (subType > 15)){
+
+        return A_EINVAL;
+    }
+
+    osbuf = A_NETBUF_ALLOC(sizeof(*cmd));
+    if (osbuf == NULL) {
+        return A_NO_MEMORY;
+    }
+
+    A_NETBUF_PUT(osbuf, sizeof(*cmd));
+
+    cmd = (WMI_FRAME_RATES_CMD *)(A_NETBUF_DATA(osbuf));
+    A_MEMZERO(cmd, sizeof(*cmd));
+
+    frameType = (A_UINT8)((subType << 4) | type);
+
+    cmd->bEnableMask = bEnable;
+    cmd->frameType = frameType;
+    cmd->frameRateMask = rateMask;
+
+    return (wmi_cmd_send(wmip, osbuf, WMI_SET_FRAMERATES_CMDID, NO_SYNC_WMIFLAG));
+}
+
 /*
  * used to set the bit rate.  rate is in Kbps.  If rate == -1
  * then auto selection is used.
  */
 A_STATUS
-wmi_set_bitrate_cmd(struct wmi_t *wmip, A_INT32 rate)
+wmi_set_bitrate_cmd(struct wmi_t *wmip, A_INT32 dataRate, A_INT32 mgmtRate, A_INT32 ctlRate)
 {
     void *osbuf;
     WMI_BIT_RATE_CMD *cmd;
-    A_INT8 index;
+    A_INT8 drix, mrix, crix;
 
-    if (rate != -1) {
-        index = wmi_validate_bitrate(wmip, rate);
-        if(index == A_EINVAL){
+    if (dataRate != -1) {
+        drix = wmi_validate_bitrate(wmip, dataRate);
+        if(drix == A_EINVAL){
             return A_EINVAL;
         }
     } else {
-        index = -1;
+        drix = (A_INT8) -1;
     }
 
+    if (mgmtRate != -1) {
+        mrix = wmi_validate_bitrate(wmip, mgmtRate);
+        if(mrix == A_EINVAL){
+            return A_EINVAL;
+        }
+    } else {
+        mrix = (A_INT8) -1;
+    }
+    if (ctlRate != -1) {
+        crix = wmi_validate_bitrate(wmip, ctlRate);
+        if(crix == A_EINVAL){
+            return A_EINVAL;
+        }
+    } else {
+        crix = (A_INT8) -1;
+    }
     osbuf = A_NETBUF_ALLOC(sizeof(*cmd));
     if (osbuf == NULL) {
         return A_NO_MEMORY;
@@ -2348,7 +3161,10 @@ wmi_set_bitrate_cmd(struct wmi_t *wmip, A_INT32 rate)
     cmd = (WMI_BIT_RATE_CMD *)(A_NETBUF_DATA(osbuf));
     A_MEMZERO(cmd, sizeof(*cmd));
 
-    cmd->rateIndex = index;
+    cmd->rateIndex = drix;
+    cmd->mgmtRateIndex = mrix;
+    cmd->ctlRateIndex  = crix;
+
 
     return (wmi_cmd_send(wmip, osbuf, WMI_SET_BITRATE_CMDID, NO_SYNC_WMIFLAG));
 }
@@ -2356,23 +3172,16 @@ wmi_set_bitrate_cmd(struct wmi_t *wmip, A_INT32 rate)
 A_STATUS
 wmi_get_bitrate_cmd(struct wmi_t *wmip)
 {
-    void *osbuf;
-
-    osbuf = A_NETBUF_ALLOC(0);      /* no payload */
-    if (osbuf == NULL) {
-        return A_NO_MEMORY;
-    }
-
-    return (wmi_cmd_send(wmip, osbuf, WMI_GET_BITRATE_CMDID, NO_SYNC_WMIFLAG));
+    return wmi_simple_cmd(wmip, WMI_GET_BITRATE_CMDID);
 }
 
 /*
  * Returns TRUE iff the given rate index is legal in the current PHY mode.
  */
 A_BOOL
-wmi_is_bitrate_index_valid(struct wmi_t *wmip, A_UINT32 rateIndex)
+wmi_is_bitrate_index_valid(struct wmi_t *wmip, A_INT32 rateIndex)
 {
-    WMI_PHY_MODE phyMode = wmip->wmi_phyMode;
+    WMI_PHY_MODE phyMode = (WMI_PHY_MODE) wmip->wmi_phyMode;
     A_BOOL isValid = TRUE;
     switch(phyMode) {
         case WMI_11A_MODE:
@@ -2428,7 +3237,7 @@ wmi_validate_bitrate(struct wmi_t *wmip, A_INT32 rate)
      i = -1;
     }
 
-    if(wmi_is_bitrate_index_valid(wmip, i) != TRUE) {
+    if(wmi_is_bitrate_index_valid(wmip, (A_INT32) i) != TRUE) {
         return A_EINVAL;
     }
 
@@ -2440,7 +3249,7 @@ wmi_set_fixrates_cmd(struct wmi_t *wmip, A_INT16 fixRatesMask)
 {
     void *osbuf;
     WMI_FIX_RATES_CMD *cmd;
-    A_UINT32 rateIndex;
+    A_INT32 rateIndex;
 
     /* Make sure all rates in the mask are valid in the current PHY mode */
     for(rateIndex = 0; rateIndex < MAX_NUMBER_OF_SUPPORT_RATES; rateIndex++) {
@@ -2471,28 +3280,13 @@ wmi_set_fixrates_cmd(struct wmi_t *wmip, A_INT16 fixRatesMask)
 A_STATUS
 wmi_get_ratemask_cmd(struct wmi_t *wmip)
 {
-    void *osbuf;
-
-    osbuf = A_NETBUF_ALLOC(0);      /* no payload */
-    if (osbuf == NULL) {
-        return A_NO_MEMORY;
-    }
-
-    return (wmi_cmd_send(wmip, osbuf, WMI_GET_FIXRATES_CMDID, NO_SYNC_WMIFLAG));
+    return wmi_simple_cmd(wmip, WMI_GET_FIXRATES_CMDID);
 }
 
 A_STATUS
 wmi_get_channelList_cmd(struct wmi_t *wmip)
 {
-    void *osbuf;
-
-    osbuf = A_NETBUF_ALLOC(0);      /* no payload */
-    if (osbuf == NULL) {
-        return A_NO_MEMORY;
-    }
-
-    return (wmi_cmd_send(wmip, osbuf, WMI_GET_CHANNEL_LIST_CMDID,
-                         NO_SYNC_WMIFLAG));
+    return wmi_simple_cmd(wmip, WMI_GET_CHANNEL_LIST_CMDID);
 }
 
 /*
@@ -2543,14 +3337,61 @@ wmi_set_channelParams_cmd(struct wmi_t *wmip, A_UINT8 scanParam,
                          NO_SYNC_WMIFLAG));
 }
 
+void
+wmi_cache_configure_rssithreshold(struct wmi_t *wmip, WMI_RSSI_THRESHOLD_PARAMS_CMD *rssiCmd)
+{
+    SQ_THRESHOLD_PARAMS *sq_thresh =
+           &wmip->wmi_SqThresholdParams[SIGNAL_QUALITY_METRICS_RSSI];
+    /*
+     * Parse the command and store the threshold values here. The checks
+     * for valid values can be put here
+     */
+    sq_thresh->weight = rssiCmd->weight;
+    sq_thresh->polling_interval = rssiCmd->pollTime;
+
+    sq_thresh->upper_threshold[0] = rssiCmd->thresholdAbove1_Val - SIGNAL_QUALITY_NOISE_FLOOR;
+    sq_thresh->upper_threshold[1] = rssiCmd->thresholdAbove2_Val - SIGNAL_QUALITY_NOISE_FLOOR;
+    sq_thresh->upper_threshold[2] = rssiCmd->thresholdAbove3_Val - SIGNAL_QUALITY_NOISE_FLOOR;
+    sq_thresh->upper_threshold[3] = rssiCmd->thresholdAbove4_Val - SIGNAL_QUALITY_NOISE_FLOOR;
+    sq_thresh->upper_threshold[4] = rssiCmd->thresholdAbove5_Val - SIGNAL_QUALITY_NOISE_FLOOR;
+    sq_thresh->upper_threshold[5] = rssiCmd->thresholdAbove6_Val - SIGNAL_QUALITY_NOISE_FLOOR;
+    sq_thresh->upper_threshold_valid_count = 6;
+
+    /* List sorted in descending order */
+    sq_thresh->lower_threshold[0] = rssiCmd->thresholdBelow6_Val - SIGNAL_QUALITY_NOISE_FLOOR;
+    sq_thresh->lower_threshold[1] = rssiCmd->thresholdBelow5_Val - SIGNAL_QUALITY_NOISE_FLOOR;
+    sq_thresh->lower_threshold[2] = rssiCmd->thresholdBelow4_Val - SIGNAL_QUALITY_NOISE_FLOOR;
+    sq_thresh->lower_threshold[3] = rssiCmd->thresholdBelow3_Val - SIGNAL_QUALITY_NOISE_FLOOR;
+    sq_thresh->lower_threshold[4] = rssiCmd->thresholdBelow2_Val - SIGNAL_QUALITY_NOISE_FLOOR;
+    sq_thresh->lower_threshold[5] = rssiCmd->thresholdBelow1_Val - SIGNAL_QUALITY_NOISE_FLOOR;
+    sq_thresh->lower_threshold_valid_count = 6;
+
+    if (!rssi_event_value) {
+        /*
+         * Configuring the thresholds to their extremes allows the host to get an
+         * event from the target which is used for the configuring the correct
+         * thresholds
+         */
+        rssiCmd->thresholdAbove1_Val = sq_thresh->upper_threshold[0];
+        rssiCmd->thresholdBelow1_Val = sq_thresh->lower_threshold[0];
+    } else {
+        /*
+         * In case the user issues multiple times of rssi_threshold_setting,
+         * we should not use the extreames anymore, the target does not expect that.
+         */
+        rssiCmd->thresholdAbove1_Val = ar6000_get_upper_threshold(rssi_event_value, sq_thresh,
+                                              sq_thresh->upper_threshold_valid_count);
+        rssiCmd->thresholdBelow1_Val = ar6000_get_lower_threshold(rssi_event_value, sq_thresh,
+                                              sq_thresh->lower_threshold_valid_count);
+    }
+}
+
 A_STATUS
 wmi_set_rssi_threshold_params(struct wmi_t *wmip,
                               WMI_RSSI_THRESHOLD_PARAMS_CMD *rssiCmd)
 {
-    void    *osbuf;
-    A_INT8  size;
-    WMI_RSSI_THRESHOLD_PARAMS_CMD *cmd;
-    /* These values are in ascending order */
+
+     /* Check these values are in ascending order */
     if( rssiCmd->thresholdAbove6_Val <= rssiCmd->thresholdAbove5_Val ||
         rssiCmd->thresholdAbove5_Val <= rssiCmd->thresholdAbove4_Val ||
         rssiCmd->thresholdAbove4_Val <= rssiCmd->thresholdAbove3_Val ||
@@ -2560,25 +3401,38 @@ wmi_set_rssi_threshold_params(struct wmi_t *wmip,
         rssiCmd->thresholdBelow5_Val <= rssiCmd->thresholdBelow4_Val ||
         rssiCmd->thresholdBelow4_Val <= rssiCmd->thresholdBelow3_Val ||
         rssiCmd->thresholdBelow3_Val <= rssiCmd->thresholdBelow2_Val ||
-        rssiCmd->thresholdBelow2_Val <= rssiCmd->thresholdBelow1_Val) {
-
+        rssiCmd->thresholdBelow2_Val <= rssiCmd->thresholdBelow1_Val)
+    {
         return A_EINVAL;
     }
 
-    size = sizeof (*cmd);
+    wmi_cache_configure_rssithreshold(wmip, rssiCmd);
 
-    osbuf = A_NETBUF_ALLOC(size);
+    return (wmi_send_rssi_threshold_params(wmip, rssiCmd));
+}
+
+A_STATUS
+wmi_set_ip_cmd(struct wmi_t *wmip, WMI_SET_IP_CMD *ipCmd)
+{
+    void    *osbuf;
+    WMI_SET_IP_CMD *cmd;
+
+    /* Multicast address are not valid */
+    if((*((A_UINT8*)&ipCmd->ips[0]) >= 0xE0) ||
+       (*((A_UINT8*)&ipCmd->ips[1]) >= 0xE0)) {
+        return A_EINVAL;
+    }
+
+    osbuf = A_NETBUF_ALLOC(sizeof(WMI_SET_IP_CMD));
     if (osbuf == NULL) {
         return A_NO_MEMORY;
     }
 
-    A_NETBUF_PUT(osbuf, size);
+    A_NETBUF_PUT(osbuf, sizeof(WMI_SET_IP_CMD));
+    cmd = (WMI_SET_IP_CMD *)(A_NETBUF_DATA(osbuf));
+    A_MEMCPY(cmd, ipCmd, sizeof(WMI_SET_IP_CMD));
 
-    cmd = (WMI_RSSI_THRESHOLD_PARAMS_CMD *)(A_NETBUF_DATA(osbuf));
-    A_MEMZERO(cmd, size);
-    A_MEMCPY(cmd, rssiCmd, sizeof(WMI_RSSI_THRESHOLD_PARAMS_CMD));
-
-    return (wmi_cmd_send(wmip, osbuf, WMI_RSSI_THRESHOLD_PARAMS_CMDID,
+    return (wmi_cmd_send(wmip, osbuf, WMI_SET_IP_CMDID,
                             NO_SYNC_WMIFLAG));
 }
 
@@ -2589,6 +3443,9 @@ wmi_set_host_sleep_mode_cmd(struct wmi_t *wmip,
     void    *osbuf;
     A_INT8  size;
     WMI_SET_HOST_SLEEP_MODE_CMD *cmd;
+    A_UINT16 activeTsids=0;
+    A_UINT8 streamExists=0;
+    A_UINT8 i;
 
     if( hostModeCmd->awake == hostModeCmd->asleep) {
         return A_EINVAL;
@@ -2606,6 +3463,36 @@ wmi_set_host_sleep_mode_cmd(struct wmi_t *wmip,
     cmd = (WMI_SET_HOST_SLEEP_MODE_CMD *)(A_NETBUF_DATA(osbuf));
     A_MEMZERO(cmd, size);
     A_MEMCPY(cmd, hostModeCmd, sizeof(WMI_SET_HOST_SLEEP_MODE_CMD));
+
+    if(hostModeCmd->asleep) {
+        /*
+         * Relinquish credits from all implicitly created pstreams since when we
+         * go to sleep. If user created explicit thinstreams exists with in a
+         * fatpipe leave them intact for the user to delete
+         */
+        LOCK_WMI(wmip);
+        streamExists = wmip->wmi_fatPipeExists;
+        UNLOCK_WMI(wmip);
+
+        for(i=0;i< WMM_NUM_AC;i++) {
+            if (streamExists & (1<<i)) {
+                LOCK_WMI(wmip);
+                activeTsids = wmip->wmi_streamExistsForAC[i];
+                UNLOCK_WMI(wmip);
+                /* If there are no user created thin streams delete the fatpipe */
+                if(!activeTsids) {
+                    streamExists &= ~(1<<i);
+                    /*Indicate inactivity to drv layer for this fatpipe(pstream)*/
+                    A_WMI_STREAM_TX_INACTIVE(wmip->wmi_devt,i);
+                }
+            }
+        }
+
+        /* Update the fatpipes that exists*/
+        LOCK_WMI(wmip);
+        wmip->wmi_fatPipeExists = streamExists;
+        UNLOCK_WMI(wmip);
+    }
 
     return (wmi_cmd_send(wmip, osbuf, WMI_SET_HOST_SLEEP_MODE_CMDID,
                             NO_SYNC_WMIFLAG));
@@ -2740,39 +3627,66 @@ wmi_del_wow_pattern_cmd(struct wmi_t *wmip,
 
 }
 
+void
+wmi_cache_configure_snrthreshold(struct wmi_t *wmip, WMI_SNR_THRESHOLD_PARAMS_CMD *snrCmd)
+{
+    SQ_THRESHOLD_PARAMS *sq_thresh =
+           &wmip->wmi_SqThresholdParams[SIGNAL_QUALITY_METRICS_SNR];
+    /*
+     * Parse the command and store the threshold values here. The checks
+     * for valid values can be put here
+     */
+    sq_thresh->weight = snrCmd->weight;
+    sq_thresh->polling_interval = snrCmd->pollTime;
+
+    sq_thresh->upper_threshold[0] = snrCmd->thresholdAbove1_Val;
+    sq_thresh->upper_threshold[1] = snrCmd->thresholdAbove2_Val;
+    sq_thresh->upper_threshold[2] = snrCmd->thresholdAbove3_Val;
+    sq_thresh->upper_threshold[3] = snrCmd->thresholdAbove4_Val;
+    sq_thresh->upper_threshold_valid_count = 4;
+
+    /* List sorted in descending order */
+    sq_thresh->lower_threshold[0] = snrCmd->thresholdBelow4_Val;
+    sq_thresh->lower_threshold[1] = snrCmd->thresholdBelow3_Val;
+    sq_thresh->lower_threshold[2] = snrCmd->thresholdBelow2_Val;
+    sq_thresh->lower_threshold[3] = snrCmd->thresholdBelow1_Val;
+    sq_thresh->lower_threshold_valid_count = 4;
+
+    if (!snr_event_value) {
+        /*
+         * Configuring the thresholds to their extremes allows the host to get an
+         * event from the target which is used for the configuring the correct
+         * thresholds
+         */
+        snrCmd->thresholdAbove1_Val = (A_UINT8)sq_thresh->upper_threshold[0];
+        snrCmd->thresholdBelow1_Val = (A_UINT8)sq_thresh->lower_threshold[0];
+    } else {
+        /*
+         * In case the user issues multiple times of snr_threshold_setting,
+         * we should not use the extreames anymore, the target does not expect that.
+         */
+        snrCmd->thresholdAbove1_Val = ar6000_get_upper_threshold(snr_event_value, sq_thresh,
+                                              sq_thresh->upper_threshold_valid_count);
+        snrCmd->thresholdBelow1_Val = ar6000_get_lower_threshold(snr_event_value, sq_thresh,
+                                              sq_thresh->lower_threshold_valid_count);
+    }
+
+}
 A_STATUS
 wmi_set_snr_threshold_params(struct wmi_t *wmip,
                              WMI_SNR_THRESHOLD_PARAMS_CMD *snrCmd)
 {
-    void    *osbuf;
-    A_INT8  size;
-    WMI_SNR_THRESHOLD_PARAMS_CMD *cmd;
-    /* These values are in ascending order */
     if( snrCmd->thresholdAbove4_Val <= snrCmd->thresholdAbove3_Val ||
         snrCmd->thresholdAbove3_Val <= snrCmd->thresholdAbove2_Val ||
         snrCmd->thresholdAbove2_Val <= snrCmd->thresholdAbove1_Val ||
         snrCmd->thresholdBelow4_Val <= snrCmd->thresholdBelow3_Val ||
         snrCmd->thresholdBelow3_Val <= snrCmd->thresholdBelow2_Val ||
-        snrCmd->thresholdBelow2_Val <= snrCmd->thresholdBelow1_Val) {
-
+        snrCmd->thresholdBelow2_Val <= snrCmd->thresholdBelow1_Val)
+    {
         return A_EINVAL;
     }
-
-    size = sizeof (*cmd);
-
-    osbuf = A_NETBUF_ALLOC(size);
-    if (osbuf == NULL) {
-        return A_NO_MEMORY;
-    }
-
-    A_NETBUF_PUT(osbuf, size);
-
-    cmd = (WMI_SNR_THRESHOLD_PARAMS_CMD *)(A_NETBUF_DATA(osbuf));
-    A_MEMZERO(cmd, size);
-    A_MEMCPY(cmd, snrCmd, sizeof(WMI_SNR_THRESHOLD_PARAMS_CMD));
-
-    return (wmi_cmd_send(wmip, osbuf, WMI_SNR_THRESHOLD_PARAMS_CMDID,
-                            NO_SYNC_WMIFLAG));
+    wmi_cache_configure_snrthreshold(wmip, snrCmd);
+    return (wmi_send_snr_threshold_params(wmip, snrCmd));
 }
 
 A_STATUS
@@ -2899,15 +3813,7 @@ wmi_config_debug_module_cmd(struct wmi_t *wmip, A_UINT16 mmask,
 A_STATUS
 wmi_get_stats_cmd(struct wmi_t *wmip)
 {
-    void *osbuf;
-
-    osbuf = A_NETBUF_ALLOC(0);      /* no payload */
-    if (osbuf == NULL) {
-        return A_NO_MEMORY;
-    }
-
-    return (wmi_cmd_send(wmip, osbuf, WMI_GET_STATISTICS_CMDID,
-                         NO_SYNC_WMIFLAG));
+    return wmi_simple_cmd(wmip, WMI_GET_STATISTICS_CMDID);
 }
 
 A_STATUS
@@ -2931,7 +3837,7 @@ wmi_addBadAp_cmd(struct wmi_t *wmip, A_UINT8 apIndex, A_UINT8 *bssid)
     cmd->badApIndex = apIndex;
     A_MEMCPY(cmd->bssid, bssid, sizeof(cmd->bssid));
 
-    return (wmi_cmd_send(wmip, osbuf, WMI_ADD_BAD_AP_CMDID, NO_SYNC_WMIFLAG));
+    return (wmi_cmd_send(wmip, osbuf, WMI_ADD_BAD_AP_CMDID, SYNC_BEFORE_WMIFLAG));
 }
 
 A_STATUS
@@ -2959,6 +3865,12 @@ wmi_deleteBadAp_cmd(struct wmi_t *wmip, A_UINT8 apIndex)
 }
 
 A_STATUS
+wmi_abort_scan_cmd(struct wmi_t *wmip)
+{
+    return wmi_simple_cmd(wmip, WMI_ABORT_SCAN_CMDID);
+}
+
+A_STATUS
 wmi_set_txPwr_cmd(struct wmi_t *wmip, A_UINT8 dbM)
 {
     void *osbuf;
@@ -2980,53 +3892,13 @@ wmi_set_txPwr_cmd(struct wmi_t *wmip, A_UINT8 dbM)
 A_STATUS
 wmi_get_txPwr_cmd(struct wmi_t *wmip)
 {
-    void *osbuf;
-
-    osbuf = A_NETBUF_ALLOC(0);      /* no payload */
-    if (osbuf == NULL) {
-        return A_NO_MEMORY;
-    }
-
-    return (wmi_cmd_send(wmip, osbuf, WMI_GET_TX_PWR_CMDID, NO_SYNC_WMIFLAG));
+    return wmi_simple_cmd(wmip, WMI_GET_TX_PWR_CMDID);
 }
-
-A_STATUS
-wmi_switch_radio(struct wmi_t *wmip, A_UINT8 on)
-{
-	WMI_SCAN_PARAMS_CMD scParams = {0, 0, 0, 0, 0,
-					WMI_SHORTSCANRATIO_DEFAULT,
-					DEFAULT_SCAN_CTRL_FLAGS,
-					0};
-
-	if (on) {
-		/* Enable foreground scanning */
-                if (wmi_scanparams_cmd(wmip, scParams.fg_start_period,
-                                       scParams.fg_end_period,
-                                       scParams.bg_period,
-                                       scParams.minact_chdwell_time,
-                                       scParams.maxact_chdwell_time,
-                                       scParams.pas_chdwell_time,
-                                       scParams.shortScanRatio,
-                                       scParams.scanCtrlFlags,
-                                       scParams.max_dfsch_act_time) != A_OK) {
-			return -EIO;
-		}
-	} else {
-		wmi_disconnect_cmd(wmip);
-		if (wmi_scanparams_cmd(wmip, 0xFFFF, 0, 0, 0,
-				       0, 0, 0, 0xFF, 0) != A_OK) {
-			return -EIO;
-		}
-	}
-
-	return A_OK;
-}
-
 
 A_UINT16
 wmi_get_mapped_qos_queue(struct wmi_t *wmip, A_UINT8 trafficClass)
 {
-	A_UINT16 activeTsids=0;
+    A_UINT16 activeTsids=0;
 
     LOCK_WMI(wmip);
     activeTsids = wmip->wmi_streamExistsForAC[trafficClass];
@@ -3038,15 +3910,7 @@ wmi_get_mapped_qos_queue(struct wmi_t *wmip, A_UINT8 trafficClass)
 A_STATUS
 wmi_get_roam_tbl_cmd(struct wmi_t *wmip)
 {
-    void *osbuf;
-
-    osbuf = A_NETBUF_ALLOC(0);      /* no payload */
-    if (osbuf == NULL) {
-        return A_NO_MEMORY;
-    }
-
-    return (wmi_cmd_send(wmip, osbuf, WMI_GET_ROAM_TBL_CMDID,
-                         NO_SYNC_WMIFLAG));
+    return wmi_simple_cmd(wmip, WMI_GET_ROAM_TBL_CMDID);
 }
 
 A_STATUS
@@ -3164,17 +4028,9 @@ wmi_gpio_output_set(struct wmi_t *wmip,
 A_STATUS
 wmi_gpio_input_get(struct wmi_t *wmip)
 {
-    void *osbuf;
-
     A_DPRINTF(DBG_WMI, (DBGFMT "Enter\n", DBGARG));
 
-    osbuf = A_NETBUF_ALLOC(0);
-    if (osbuf == NULL) {
-        return A_NO_MEMORY;
-    }
-
-    return (wmi_cmd_send_xtnd(wmip, osbuf, WMIX_GPIO_INPUT_GET_CMDID,
-                             NO_SYNC_WMIFLAG));
+    return wmi_simple_cmd_xtnd(wmip, WMIX_GPIO_INPUT_GET_CMDID);
 }
 
 /* Send a command to the Target that changes the value of a GPIO register. */
@@ -3460,9 +4316,35 @@ wmi_set_max_sp_len_cmd(struct wmi_t *wmip, A_UINT8 maxSPLen)
 }
 
 A_UINT8
+wmi_determine_userPriority(
+    A_UINT8 *pkt,
+    A_UINT32 layer2Pri)
+{
+    A_UINT8 ipPri;
+    iphdr *ipHdr = (iphdr *)pkt;
+
+    /* Determine IPTOS priority */
+    /*
+     * IP Tos format :
+     *      (Refer Pg 57 WMM-test-plan-v1.2)
+     * IP-TOS - 8bits
+     *          : DSCP(6-bits) ECN(2-bits)
+     *          : DSCP - P2 P1 P0 X X X
+     *              where (P2 P1 P0) form 802.1D
+     */
+    ipPri = ipHdr->ip_tos >> 5;
+    ipPri &= 0x7;
+
+    if ((layer2Pri & 0x7) > ipPri)
+        return ((A_UINT8)layer2Pri & 0x7);
+    else
+        return ipPri;
+}
+
+A_UINT8
 convert_userPriority_to_trafficClass(A_UINT8 userPriority)
 {
-        return  (up_to_ac[userPriority & 0x7]);
+    return  (up_to_ac[userPriority & 0x7]);
 }
 
 A_UINT8
@@ -3474,7 +4356,33 @@ wmi_get_power_mode_cmd(struct wmi_t *wmip)
 A_STATUS
 wmi_verify_tspec_params(WMI_CREATE_PSTREAM_CMD *pCmd, A_BOOL tspecCompliance)
 {
-    return A_OK;
+    A_STATUS ret = A_OK;
+
+#define TSPEC_SUSPENSION_INTERVAL_ATHEROS_DEF (~0)
+#define TSPEC_SERVICE_START_TIME_ATHEROS_DEF  0
+#define TSPEC_MAX_BURST_SIZE_ATHEROS_DEF      0
+#define TSPEC_DELAY_BOUND_ATHEROS_DEF         0
+#define TSPEC_MEDIUM_TIME_ATHEROS_DEF         0
+#define TSPEC_SBA_ATHEROS_DEF                 0x2000  /* factor is 1 */
+
+    /* Verify TSPEC params for ATHEROS compliance */
+    if(tspecCompliance == ATHEROS_COMPLIANCE) {
+        if ((pCmd->suspensionInt != TSPEC_SUSPENSION_INTERVAL_ATHEROS_DEF) ||
+            (pCmd->serviceStartTime != TSPEC_SERVICE_START_TIME_ATHEROS_DEF) ||
+            (pCmd->minDataRate != pCmd->meanDataRate) ||
+            (pCmd->minDataRate != pCmd->peakDataRate) ||
+            (pCmd->maxBurstSize != TSPEC_MAX_BURST_SIZE_ATHEROS_DEF) ||
+            (pCmd->delayBound != TSPEC_DELAY_BOUND_ATHEROS_DEF) ||
+            (pCmd->sba != TSPEC_SBA_ATHEROS_DEF) ||
+            (pCmd->mediumTime != TSPEC_MEDIUM_TIME_ATHEROS_DEF)) {
+
+            A_DPRINTF(DBG_WMI, (DBGFMT "Invalid TSPEC params\n", DBGARG));
+            //A_PRINTF("%s: Invalid TSPEC params\n", __func__);
+            ret = A_EINVAL;
+        }
+    }
+
+    return ret;
 }
 
 #ifdef CONFIG_HOST_TCMD_SUPPORT
@@ -3622,6 +4530,27 @@ wmi_set_wmm_txop(struct wmi_t *wmip, WMI_TXOP_CFG cfg)
 
 }
 
+A_STATUS
+wmi_set_country(struct wmi_t *wmip, A_UCHAR *countryCode)
+{
+    void *osbuf;
+    WMI_AP_SET_COUNTRY_CMD *cmd;
+
+    osbuf = A_NETBUF_ALLOC(sizeof(*cmd));
+    if (osbuf == NULL) {
+        return A_NO_MEMORY;
+    }
+
+    A_NETBUF_PUT(osbuf, sizeof(*cmd));
+
+    cmd = (WMI_AP_SET_COUNTRY_CMD *)(A_NETBUF_DATA(osbuf));
+    A_MEMZERO(cmd, sizeof(*cmd));
+    A_MEMCPY(cmd->countryCode,countryCode,3);
+
+    return (wmi_cmd_send(wmip, osbuf, WMI_AP_SET_COUNTRY_CMDID,
+            NO_SYNC_WMIFLAG));
+}
+
 #ifdef CONFIG_HOST_TCMD_SUPPORT
 /* WMI  layer doesn't need to know the data type of the test cmd.
    This would be beneficial for customers like Qualcomm, who might
@@ -3656,6 +4585,8 @@ wmi_set_bt_status_cmd(struct wmi_t *wmip, A_UINT8 streamType, A_UINT8 status)
     void *osbuf;
     WMI_SET_BT_STATUS_CMD *cmd;
 
+    ATHR_DISPLAY_MSG (_T("Enter - streamType=%d, status=%d\n"), streamType, status);
+
     osbuf = A_NETBUF_ALLOC(sizeof(*cmd));
     if (osbuf == NULL) {
         return A_NO_MEMORY;
@@ -3677,6 +4608,50 @@ wmi_set_bt_params_cmd(struct wmi_t *wmip, WMI_SET_BT_PARAMS_CMD* cmd)
 {
     void *osbuf;
     WMI_SET_BT_PARAMS_CMD* alloc_cmd;
+
+    ATHR_DISPLAY_MSG (_T("cmd params is %d\n"), cmd->paramType);
+
+    if (cmd->paramType == BT_PARAM_SCO) {
+      ATHR_DISPLAY_MSG (_T("sco params %d %d %d %d %d %d %d %d %d %d %d %d\n"),
+        cmd->info.scoParams.numScoCyclesForceTrigger,
+        cmd->info.scoParams.dataResponseTimeout,
+        cmd->info.scoParams.stompScoRules,
+        cmd->info.scoParams.scoOptFlags,
+        cmd->info.scoParams.p2lrpOptModeBound,
+        cmd->info.scoParams.p2lrpNonOptModeBound,
+        cmd->info.scoParams.stompDutyCyleVal,
+        cmd->info.scoParams.stompDutyCyleMaxVal,
+        cmd->info.scoParams.psPollLatencyFraction,
+        cmd->info.scoParams.noSCOSlots,
+        cmd->info.scoParams.noIdleSlots,
+        cmd->info.scoParams.reserved8);
+    }
+    else if (cmd->paramType == BT_PARAM_A2DP) {
+      ATHR_DISPLAY_MSG (_T("A2DP params %d %d %d %d %d %d %d %d %d\n"),
+        cmd->info.a2dpParams.a2dpWlanUsageLimit,
+        cmd->info.a2dpParams.a2dpBurstCntMin,
+        cmd->info.a2dpParams.a2dpDataRespTimeout,
+        cmd->info.a2dpParams.a2dpOptFlags,
+        cmd->info.a2dpParams.p2lrpOptModeBound,
+        cmd->info.a2dpParams.p2lrpNonOptModeBound,
+        cmd->info.a2dpParams.reserved16,
+        cmd->info.a2dpParams.isCoLocatedBtRoleMaster,
+        cmd->info.a2dpParams.reserved8);
+    }
+    else if (cmd->paramType == BT_PARAM_ANTENNA_CONFIG) {
+      ATHR_DISPLAY_MSG (_T("Ant config %d\n"), cmd->info.antType);
+    }
+    else if (cmd->paramType == BT_PARAM_COLOCATED_BT_DEVICE) {
+      ATHR_DISPLAY_MSG (_T("co-located BT %d\n"), cmd->info.coLocatedBtDev);
+    }
+    else if (cmd->paramType == BT_PARAM_ACLCOEX) {
+      ATHR_DISPLAY_MSG (_T("ACL params %d %d %d\n"), cmd->info.aclCoexParams.aclWlanMediumUsageTime,
+        cmd->info.aclCoexParams.aclBtMediumUsageTime,
+        cmd->info.aclCoexParams.aclDataRespTimeout);
+    }
+    else if (cmd->paramType == BT_PARAM_11A_SEPARATE_ANT) {
+      A_DPRINTF(DBG_WMI, (DBGFMT "11A ant\n", DBGARG));
+    }
 
     osbuf = A_NETBUF_ALLOC(sizeof(*cmd));
     if (osbuf == NULL) {
@@ -3738,6 +4713,82 @@ wmi_set_keepalive_cmd(struct wmi_t *wmip, A_UINT8 keepaliveInterval)
 }
 
 A_STATUS
+wmi_set_params_cmd(struct wmi_t *wmip, A_UINT32 opcode, A_UINT32 length, A_CHAR* buffer)
+{
+    void *osbuf;
+    WMI_SET_PARAMS_CMD *cmd;
+
+    osbuf = A_NETBUF_ALLOC(sizeof(*cmd) + length);
+    if (osbuf == NULL) {
+        return A_NO_MEMORY;
+    }
+
+    A_NETBUF_PUT(osbuf, sizeof(*cmd) + length);
+
+    cmd = (WMI_SET_PARAMS_CMD *)(A_NETBUF_DATA(osbuf));
+    A_MEMZERO(cmd, sizeof(*cmd));
+    cmd->opcode = opcode;
+    cmd->length = length;
+    A_MEMCPY(cmd->buffer, buffer, length);
+
+    return (wmi_cmd_send(wmip, osbuf, WMI_SET_PARAMS_CMDID,
+                         NO_SYNC_WMIFLAG));
+}
+
+
+A_STATUS
+wmi_set_mcast_filter_cmd(struct wmi_t *wmip, A_UINT8 dot1, A_UINT8 dot2, A_UINT8 dot3, A_UINT8 dot4)
+{
+    void *osbuf;
+    WMI_SET_MCAST_FILTER_CMD *cmd;
+
+    osbuf = A_NETBUF_ALLOC(sizeof(*cmd));
+    if (osbuf == NULL) {
+        return A_NO_MEMORY;
+    }
+
+    A_NETBUF_PUT(osbuf, sizeof(*cmd));
+
+    cmd = (WMI_SET_MCAST_FILTER_CMD *)(A_NETBUF_DATA(osbuf));
+    cmd->multicast_mac[0] = 0x01;
+    cmd->multicast_mac[1] = 0x00;
+    cmd->multicast_mac[2] = 0x5e;
+    cmd->multicast_mac[3] = dot2&0x7F;
+    cmd->multicast_mac[4] = dot3;
+    cmd->multicast_mac[5] = dot4;
+
+    return (wmi_cmd_send(wmip, osbuf, WMI_SET_MCAST_FILTER_CMDID,
+                         NO_SYNC_WMIFLAG));
+}
+
+
+A_STATUS
+wmi_del_mcast_filter_cmd(struct wmi_t *wmip, A_UINT8 dot1, A_UINT8 dot2, A_UINT8 dot3, A_UINT8 dot4)
+{
+    void *osbuf;
+    WMI_SET_MCAST_FILTER_CMD *cmd;
+
+    osbuf = A_NETBUF_ALLOC(sizeof(*cmd));
+    if (osbuf == NULL) {
+        return A_NO_MEMORY;
+    }
+
+    A_NETBUF_PUT(osbuf, sizeof(*cmd));
+
+    cmd = (WMI_SET_MCAST_FILTER_CMD *)(A_NETBUF_DATA(osbuf));
+    cmd->multicast_mac[0] = 0x01;
+    cmd->multicast_mac[1] = 0x00;
+    cmd->multicast_mac[2] = 0x5e;
+    cmd->multicast_mac[3] = dot2&0x7F;
+    cmd->multicast_mac[4] = dot3;
+    cmd->multicast_mac[5] = dot4;
+
+    return (wmi_cmd_send(wmip, osbuf, WMI_DEL_MCAST_FILTER_CMDID,
+                         NO_SYNC_WMIFLAG));
+}
+
+
+A_STATUS
 wmi_set_appie_cmd(struct wmi_t *wmip, A_UINT8 mgmtFrmType, A_UINT8 ieLen,
                   A_UINT8 *ieInfo)
 {
@@ -3745,9 +4796,6 @@ wmi_set_appie_cmd(struct wmi_t *wmip, A_UINT8 mgmtFrmType, A_UINT8 ieLen,
     WMI_SET_APPIE_CMD *cmd;
     A_UINT16 cmdLen;
 
-    if (ieLen > WMI_MAX_IE_LEN) {
-        return A_ERROR;
-    }
     cmdLen = sizeof(*cmd) + ieLen - 1;
     osbuf = A_NETBUF_ALLOC(cmdLen);
     if (osbuf == NULL) {
@@ -3799,34 +4847,54 @@ wmi_get_rate(A_INT8 rateindex)
 void
 wmi_node_return (struct wmi_t *wmip, bss_t *bss)
 {
-	if (NULL != bss)
-	{
-		wlan_node_return (&wmip->wmi_scan_table, bss);
-	}
+    if (NULL != bss)
+    {
+        wlan_node_return (&wmip->wmi_scan_table, bss);
+    }
+}
+
+void
+wmi_set_nodeage(struct wmi_t *wmip, A_UINT32 nodeAge)
+{
+    wlan_set_nodeage(&wmip->wmi_scan_table,nodeAge);
 }
 
 bss_t *
 wmi_find_Ssidnode (struct wmi_t *wmip, A_UCHAR *pSsid,
-				   A_UINT32 ssidLength, A_BOOL bIsWPA2)
+                   A_UINT32 ssidLength, A_BOOL bIsWPA2, A_BOOL bMatchSSID)
 {
-	bss_t *node = NULL;
+    bss_t *node = NULL;
     node = wlan_find_Ssidnode (&wmip->wmi_scan_table, pSsid,
-							   ssidLength, bIsWPA2);
-	return node;
+                               ssidLength, bIsWPA2, bMatchSSID);
+    return node;
 }
+
 
 void
 wmi_free_allnodes(struct wmi_t *wmip)
 {
-	wlan_free_allnodes(&wmip->wmi_scan_table);
+    wlan_free_allnodes(&wmip->wmi_scan_table);
 }
 
 bss_t *
 wmi_find_node(struct wmi_t *wmip, const A_UINT8 *macaddr)
 {
-	bss_t *ni=NULL;
-	ni=wlan_find_node(&wmip->wmi_scan_table,macaddr);
-	return ni;
+    bss_t *ni=NULL;
+    ni=wlan_find_node(&wmip->wmi_scan_table,macaddr);
+    return ni;
+}
+
+void
+wmi_free_node(struct wmi_t *wmip, const A_UINT8 *macaddr)
+{
+    bss_t *ni=NULL;
+
+    ni=wlan_find_node(&wmip->wmi_scan_table,macaddr);
+    if (ni != NULL) {
+        wlan_node_reclaim(&wmip->wmi_scan_table, ni);
+    }
+
+    return;
 }
 
 A_STATUS
@@ -3881,10 +4949,35 @@ wmi_get_pmkid_list_event_rx(struct wmi_t *wmip, A_UINT8 *datap, A_UINT32 len)
     }
 
     A_WMI_PMKID_LIST_EVENT(wmip->wmi_devt, reply->numPMKID,
-                           reply->pmkidList);
+                           reply->pmkidList, reply->bssidList[0]);
 
     return A_OK;
 }
+
+
+static A_STATUS
+wmi_set_params_event_rx(struct wmi_t *wmip, A_UINT8 *datap, A_UINT32 len)
+{
+    WMI_SET_PARAMS_REPLY *reply;
+
+    if (len < sizeof(WMI_SET_PARAMS_REPLY)) {
+        return A_EINVAL;
+    }
+    reply = (WMI_SET_PARAMS_REPLY *)datap;
+
+    if (A_OK == reply->status)
+    {
+
+    }
+    else
+    {
+
+    }
+
+    return A_OK;
+}
+
+
 
 #ifdef CONFIG_HOST_DSET_SUPPORT
 A_STATUS
@@ -3898,9 +4991,13 @@ wmi_dset_data_reply(struct wmi_t *wmip,
 {
     void *osbuf;
     WMIX_DSETDATA_REPLY_CMD *data_reply;
-    int size;
+    A_UINT32 size;
 
     size = sizeof(*data_reply) + length;
+
+    if (size <= length) {
+        return A_ERROR;
+    }
 
     A_DPRINTF(DBG_WMI,
         (DBGFMT "Enter - length=%d status=%d\n", DBGARG, length, status));
@@ -3935,7 +5032,11 @@ wmi_set_wsc_status_cmd(struct wmi_t *wmip, A_UINT32 status)
     void *osbuf;
     char *cmd;
 
-	wps_enable = status;
+/* ATHENV */
+#ifdef ANDROID_ENV
+    wps_enable = status;
+#endif
+/* ATHENV */
 
     osbuf = a_netbuf_alloc(sizeof(1));
     if (osbuf == NULL) {
@@ -3950,5 +5051,853 @@ wmi_set_wsc_status_cmd(struct wmi_t *wmip, A_UINT32 status)
     cmd[0] = (status?1:0);
     return (wmi_cmd_send(wmip, osbuf, WMI_SET_WSC_STATUS_CMDID,
                          NO_SYNC_WMIFLAG));
+}
+
+#if defined(CONFIG_TARGET_PROFILE_SUPPORT)
+A_STATUS
+wmi_prof_cfg_cmd(struct wmi_t *wmip,
+                 A_UINT32 period,
+                 A_UINT32 nbins)
+{
+    void *osbuf;
+    WMIX_PROF_CFG_CMD *cmd;
+
+    osbuf = A_NETBUF_ALLOC(sizeof(*cmd));
+    if (osbuf == NULL) {
+        return A_NO_MEMORY;
+    }
+
+    A_NETBUF_PUT(osbuf, sizeof(*cmd));
+
+    cmd = (WMIX_PROF_CFG_CMD *)(A_NETBUF_DATA(osbuf));
+    A_MEMZERO(cmd, sizeof(*cmd));
+    cmd->period = period;
+    cmd->nbins  = nbins;
+
+    return (wmi_cmd_send_xtnd(wmip, osbuf, WMIX_PROF_CFG_CMDID, NO_SYNC_WMIFLAG));
+}
+
+A_STATUS
+wmi_prof_addr_set_cmd(struct wmi_t *wmip, A_UINT32 addr)
+{
+    void *osbuf;
+    WMIX_PROF_ADDR_SET_CMD *cmd;
+
+    osbuf = A_NETBUF_ALLOC(sizeof(*cmd));
+    if (osbuf == NULL) {
+        return A_NO_MEMORY;
+    }
+
+    A_NETBUF_PUT(osbuf, sizeof(*cmd));
+
+    cmd = (WMIX_PROF_ADDR_SET_CMD *)(A_NETBUF_DATA(osbuf));
+    A_MEMZERO(cmd, sizeof(*cmd));
+    cmd->addr = addr;
+
+    return (wmi_cmd_send_xtnd(wmip, osbuf, WMIX_PROF_ADDR_SET_CMDID, NO_SYNC_WMIFLAG));
+}
+
+A_STATUS
+wmi_prof_start_cmd(struct wmi_t *wmip)
+{
+    return wmi_simple_cmd_xtnd(wmip, WMIX_PROF_START_CMDID);
+}
+
+A_STATUS
+wmi_prof_stop_cmd(struct wmi_t *wmip)
+{
+    return wmi_simple_cmd_xtnd(wmip, WMIX_PROF_STOP_CMDID);
+}
+
+A_STATUS
+wmi_prof_count_get_cmd(struct wmi_t *wmip)
+{
+    return wmi_simple_cmd_xtnd(wmip, WMIX_PROF_COUNT_GET_CMDID);
+}
+
+/* Called to handle WMIX_PROF_CONT_EVENTID */
+static A_STATUS
+wmi_prof_count_rx(struct wmi_t *wmip, A_UINT8 *datap, int len)
+{
+    WMIX_PROF_COUNT_EVENT *prof_data = (WMIX_PROF_COUNT_EVENT *)datap;
+
+    A_DPRINTF(DBG_WMI,
+        (DBGFMT "Enter - addr=0x%x count=%d\n", DBGARG,
+        prof_data->addr, prof_data->count));
+
+    A_WMI_PROF_COUNT_RX(prof_data->addr, prof_data->count);
+
+    return A_OK;
+}
+#endif /* CONFIG_TARGET_PROFILE_SUPPORT */
+
+#ifdef OS_ROAM_MANAGEMENT
+
+#define ETHERNET_MAC_ADDRESS_LENGTH    6
+
+void
+wmi_scan_indication (struct wmi_t *wmip)
+{
+    struct ieee80211_node_table *nt;
+    A_UINT32 gen;
+    A_UINT32 size;
+    A_UINT32 bsssize;
+    bss_t *bss;
+    A_UINT32 numbss;
+    PNDIS_802_11_BSSID_SCAN_INFO psi;
+    PBYTE  pie;
+    NDIS_802_11_FIXED_IEs *pFixed;
+    NDIS_802_11_VARIABLE_IEs *pVar;
+    A_UINT32  RateSize;
+
+    struct ar6kScanIndication
+    {
+        NDIS_802_11_STATUS_INDICATION     ind;
+        NDIS_802_11_BSSID_SCAN_INFO_LIST  slist;
+    } *pAr6kScanIndEvent;
+
+    nt = &wmip->wmi_scan_table;
+
+    ++nt->nt_si_gen;
+
+
+    gen = nt->nt_si_gen;
+
+    size = offsetof(struct ar6kScanIndication, slist) +
+           offsetof(NDIS_802_11_BSSID_SCAN_INFO_LIST, BssidScanInfo);
+
+    numbss = 0;
+
+    IEEE80211_NODE_LOCK(nt);
+
+    //calc size
+    for (bss = nt->nt_node_first; bss; bss = bss->ni_list_next) {
+        if (bss->ni_si_gen != gen) {
+            bsssize = offsetof(NDIS_802_11_BSSID_SCAN_INFO, Bssid) + offsetof(NDIS_WLAN_BSSID_EX, IEs);
+            bsssize = bsssize + sizeof(NDIS_802_11_FIXED_IEs);
+
+#ifdef SUPPORT_WPA2
+            if (bss->ni_cie.ie_rsn) {
+                bsssize = bsssize + bss->ni_cie.ie_rsn[1] + 2;
+            }
+#endif
+            if (bss->ni_cie.ie_wpa) {
+                bsssize = bsssize + bss->ni_cie.ie_wpa[1] + 2;
+            }
+
+            // bsssize must be a multiple of 4 to maintain alignment.
+            bsssize = (bsssize + 3) & ~3;
+
+            size += bsssize;
+
+            numbss++;
+        }
+    }
+
+    if (0 == numbss)
+    {
+//        RETAILMSG(1, (L"AR6K: scan indication: 0 bss\n"));
+        ar6000_scan_indication (wmip->wmi_devt, NULL, 0);
+        IEEE80211_NODE_UNLOCK (nt);
+        return;
+    }
+
+    pAr6kScanIndEvent = A_MALLOC(size);
+
+    if (NULL == pAr6kScanIndEvent)
+    {
+        IEEE80211_NODE_UNLOCK(nt);
+        return;
+    }
+
+    A_MEMZERO(pAr6kScanIndEvent, size);
+
+    //copy data
+    pAr6kScanIndEvent->ind.StatusType = Ndis802_11StatusType_BssidScanInfoList;
+    pAr6kScanIndEvent->slist.Version = 1;
+    pAr6kScanIndEvent->slist.NumItems = numbss;
+
+    psi = &pAr6kScanIndEvent->slist.BssidScanInfo[0];
+
+    for (bss = nt->nt_node_first; bss; bss = bss->ni_list_next) {
+        if (bss->ni_si_gen != gen) {
+
+            bss->ni_si_gen = gen;
+
+            //Set scan time
+            psi->ScanTime = bss->ni_tstamp - WLAN_NODE_INACT_TIMEOUT_MSEC;
+
+            // Copy data to bssid_ex
+            bsssize = offsetof(NDIS_WLAN_BSSID_EX, IEs);
+            bsssize = bsssize + sizeof(NDIS_802_11_FIXED_IEs);
+
+#ifdef SUPPORT_WPA2
+            if (bss->ni_cie.ie_rsn) {
+                bsssize = bsssize + bss->ni_cie.ie_rsn[1] + 2;
+            }
+#endif
+            if (bss->ni_cie.ie_wpa) {
+                bsssize = bsssize + bss->ni_cie.ie_wpa[1] + 2;
+            }
+
+            // bsssize must be a multiple of 4 to maintain alignment.
+            bsssize = (bsssize + 3) & ~3;
+
+            psi->Bssid.Length = bsssize;
+
+            memcpy (psi->Bssid.MacAddress, bss->ni_macaddr, ETHERNET_MAC_ADDRESS_LENGTH);
+
+
+//if (((bss->ni_macaddr[3] == 0xCE) && (bss->ni_macaddr[4] == 0xF0) && (bss->ni_macaddr[5] == 0xE7)) ||
+//  ((bss->ni_macaddr[3] == 0x03) && (bss->ni_macaddr[4] == 0xE2) && (bss->ni_macaddr[5] == 0x70)))
+//            RETAILMSG (1, (L"%x\n",bss->ni_macaddr[5]));
+
+            psi->Bssid.Ssid.SsidLength = 0;
+            pie = bss->ni_cie.ie_ssid;
+
+            if (pie) {
+                // Format of SSID IE is:
+                //  Type   (1 octet)
+                //  Length (1 octet)
+                //  SSID (Length octets)
+                //
+                //  Validation of the IE should have occurred within WMI.
+                //
+                if (pie[1] <= 32) {
+                    psi->Bssid.Ssid.SsidLength = pie[1];
+                    memcpy(psi->Bssid.Ssid.Ssid, &pie[2], psi->Bssid.Ssid.SsidLength);
+                }
+            }
+            psi->Bssid.Privacy = (bss->ni_cie.ie_capInfo & 0x10) ? 1 : 0;
+
+            //Post the RSSI value relative to the Standard Noise floor value.
+            psi->Bssid.Rssi = bss->ni_rssi;
+
+            if (bss->ni_cie.ie_chan >= 2412 && bss->ni_cie.ie_chan <= 2484) {
+
+                if (bss->ni_cie.ie_rates && bss->ni_cie.ie_xrates) {
+                    psi->Bssid.NetworkTypeInUse = Ndis802_11OFDM24;
+                }
+                else {
+                    psi->Bssid.NetworkTypeInUse = Ndis802_11DS;
+                }
+            }
+            else {
+                psi->Bssid.NetworkTypeInUse = Ndis802_11OFDM5;
+            }
+
+            psi->Bssid.Configuration.Length = sizeof(psi->Bssid.Configuration);
+            psi->Bssid.Configuration.BeaconPeriod = bss->ni_cie.ie_beaconInt; // Units are Kmicroseconds (1024 us)
+            psi->Bssid.Configuration.ATIMWindow =  0;
+            psi->Bssid.Configuration.DSConfig =  bss->ni_cie.ie_chan * 1000;
+            psi->Bssid.InfrastructureMode = ((bss->ni_cie.ie_capInfo & 0x03) == 0x01 ) ? Ndis802_11Infrastructure : Ndis802_11IBSS;
+
+            RateSize = 0;
+            pie = bss->ni_cie.ie_rates;
+            if (pie) {
+                RateSize = (pie[1] < NDIS_802_11_LENGTH_RATES_EX) ? pie[1] : NDIS_802_11_LENGTH_RATES_EX;
+                memcpy(psi->Bssid.SupportedRates, &pie[2], RateSize);
+            }
+            pie = bss->ni_cie.ie_xrates;
+            if (pie && RateSize < NDIS_802_11_LENGTH_RATES_EX) {
+                memcpy(psi->Bssid.SupportedRates + RateSize, &pie[2],
+                       (pie[1] < (NDIS_802_11_LENGTH_RATES_EX - RateSize)) ? pie[1] : (NDIS_802_11_LENGTH_RATES_EX - RateSize));
+            }
+
+            // Copy the fixed IEs
+            psi->Bssid.IELength = sizeof(NDIS_802_11_FIXED_IEs);
+
+            pFixed = (NDIS_802_11_FIXED_IEs *)psi->Bssid.IEs;
+            memcpy(pFixed->Timestamp, bss->ni_cie.ie_tstamp, sizeof(pFixed->Timestamp));
+            pFixed->BeaconInterval = bss->ni_cie.ie_beaconInt;
+            pFixed->Capabilities = bss->ni_cie.ie_capInfo;
+
+            // Copy selected variable IEs
+
+            pVar = (NDIS_802_11_VARIABLE_IEs *)((PBYTE)pFixed + sizeof(NDIS_802_11_FIXED_IEs));
+
+#ifdef SUPPORT_WPA2
+            // Copy the WPAv2 IE
+            if (bss->ni_cie.ie_rsn) {
+                pie = bss->ni_cie.ie_rsn;
+                psi->Bssid.IELength += pie[1] + 2;
+                memcpy(pVar, pie, pie[1] + 2);
+                pVar = (NDIS_802_11_VARIABLE_IEs *)((PBYTE)pVar + pie[1] + 2);
+            }
+#endif
+            // Copy the WPAv1 IE
+            if (bss->ni_cie.ie_wpa) {
+                pie = bss->ni_cie.ie_wpa;
+                psi->Bssid.IELength += pie[1] + 2;
+                memcpy(pVar, pie, pie[1] + 2);
+                pVar = (NDIS_802_11_VARIABLE_IEs *)((PBYTE)pVar + pie[1] + 2);
+            }
+
+            // Advance buffer pointer
+            psi = (PNDIS_802_11_BSSID_SCAN_INFO)((BYTE*)psi + bsssize + FIELD_OFFSET(NDIS_802_11_BSSID_SCAN_INFO, Bssid));
+        }
+    }
+
+    IEEE80211_NODE_UNLOCK(nt);
+
+//    wmi_free_allnodes(wmip);
+
+//    RETAILMSG(1, (L"AR6K: scan indication: %u bss\n", numbss));
+
+    ar6000_scan_indication (wmip->wmi_devt, pAr6kScanIndEvent, size);
+
+    A_FREE(pAr6kScanIndEvent);
+}
+#endif
+
+A_UINT8
+ar6000_get_upper_threshold(A_INT16 rssi, SQ_THRESHOLD_PARAMS *sq_thresh,
+                           A_UINT32 size)
+{
+    A_UINT32 index;
+    A_UINT8 threshold = (A_UINT8)sq_thresh->upper_threshold[size - 1];
+
+    /* The list is already in sorted order. Get the next lower value */
+    for (index = 0; index < size; index ++) {
+        if (rssi < sq_thresh->upper_threshold[index]) {
+            threshold = (A_UINT8)sq_thresh->upper_threshold[index];
+            break;
+        }
+    }
+
+    return threshold;
+}
+
+A_UINT8
+ar6000_get_lower_threshold(A_INT16 rssi, SQ_THRESHOLD_PARAMS *sq_thresh,
+                           A_UINT32 size)
+{
+    A_UINT32 index;
+    A_UINT8 threshold = (A_UINT8)sq_thresh->lower_threshold[size - 1];
+
+    /* The list is already in sorted order. Get the next lower value */
+    for (index = 0; index < size; index ++) {
+        if (rssi > sq_thresh->lower_threshold[index]) {
+            threshold = (A_UINT8)sq_thresh->lower_threshold[index];
+            break;
+        }
+    }
+
+    return threshold;
+}
+static A_STATUS
+wmi_send_rssi_threshold_params(struct wmi_t *wmip,
+                              WMI_RSSI_THRESHOLD_PARAMS_CMD *rssiCmd)
+{
+    void    *osbuf;
+    A_INT8  size;
+    WMI_RSSI_THRESHOLD_PARAMS_CMD *cmd;
+
+    size = sizeof (*cmd);
+
+    osbuf = A_NETBUF_ALLOC(size);
+    if (osbuf == NULL) {
+        return A_NO_MEMORY;
+    }
+
+    A_NETBUF_PUT(osbuf, size);
+
+    cmd = (WMI_RSSI_THRESHOLD_PARAMS_CMD *)(A_NETBUF_DATA(osbuf));
+    A_MEMZERO(cmd, size);
+    A_MEMCPY(cmd, rssiCmd, sizeof(WMI_RSSI_THRESHOLD_PARAMS_CMD));
+
+    return (wmi_cmd_send(wmip, osbuf, WMI_RSSI_THRESHOLD_PARAMS_CMDID,
+                            NO_SYNC_WMIFLAG));
+}
+static A_STATUS
+wmi_send_snr_threshold_params(struct wmi_t *wmip,
+                             WMI_SNR_THRESHOLD_PARAMS_CMD *snrCmd)
+{
+    void    *osbuf;
+    A_INT8  size;
+    WMI_SNR_THRESHOLD_PARAMS_CMD *cmd;
+
+    size = sizeof (*cmd);
+
+    osbuf = A_NETBUF_ALLOC(size);
+    if (osbuf == NULL) {
+        return A_NO_MEMORY;
+    }
+
+    A_NETBUF_PUT(osbuf, size);
+    cmd = (WMI_SNR_THRESHOLD_PARAMS_CMD *)(A_NETBUF_DATA(osbuf));
+    A_MEMZERO(cmd, size);
+    A_MEMCPY(cmd, snrCmd, sizeof(WMI_SNR_THRESHOLD_PARAMS_CMD));
+
+    return (wmi_cmd_send(wmip, osbuf, WMI_SNR_THRESHOLD_PARAMS_CMDID,
+                            NO_SYNC_WMIFLAG));
+}
+
+A_STATUS
+wmi_set_target_event_report_cmd(struct wmi_t *wmip, WMI_SET_TARGET_EVENT_REPORT_CMD* cmd)
+{
+    void *osbuf;
+    WMI_SET_TARGET_EVENT_REPORT_CMD* alloc_cmd;
+
+    osbuf = A_NETBUF_ALLOC(sizeof(*cmd));
+    if (osbuf == NULL) {
+        return A_NO_MEMORY;
+    }
+
+    A_NETBUF_PUT(osbuf, sizeof(*cmd));
+
+    alloc_cmd = (WMI_SET_TARGET_EVENT_REPORT_CMD *)(A_NETBUF_DATA(osbuf));
+    A_MEMZERO(alloc_cmd, sizeof(*cmd));
+    A_MEMCPY(alloc_cmd, cmd, sizeof(*cmd));
+
+    return (wmi_cmd_send(wmip, osbuf, WMI_SET_TARGET_EVENT_REPORT_CMDID,
+            NO_SYNC_WMIFLAG));
+}
+
+#ifdef PYXIS_ADHOC
+A_STATUS
+wmi_set_pyxis_gen_config (struct wmi_t *wmip, A_UINT32 dataWindowSizeMin, A_UINT32 dataWindowSizeMax, A_UINT8  maxJoiners)
+{
+    void *osbuf;
+    WMI_PYXIS_GEN_CONFIG *cmd = NULL;
+    A_UINT16 cmdLen;
+
+    cmdLen = sizeof (WMI_PYXIS_CONFIG_HDR) + sizeof (dataWindowSizeMin) + sizeof (dataWindowSizeMax) + sizeof (maxJoiners);
+
+    osbuf = A_NETBUF_ALLOC (cmdLen);
+
+    if (osbuf == NULL)
+    {
+        return A_NO_MEMORY;
+    }
+
+    A_NETBUF_PUT(osbuf, cmdLen);
+
+    cmd = (WMI_PYXIS_GEN_CONFIG *)(A_NETBUF_DATA(osbuf));
+    A_MEMZERO(cmd, cmdLen);
+
+    cmd->hdr.pyxisConfigType = WMI_PYXIS_GEN_PARAMS;
+    cmd->hdr.pyxisConfigLen  = sizeof (dataWindowSizeMin) + sizeof (dataWindowSizeMax) + sizeof (maxJoiners);
+    cmd->dataWindowSizeMin   = dataWindowSizeMin;
+    cmd->dataWindowSizeMax   = dataWindowSizeMax;
+    cmd->maxJoiners          = maxJoiners;
+
+    return (wmi_cmd_send (wmip, osbuf, WMI_PYXIS_CONFIG_CMDID, NO_SYNC_WMIFLAG));
+}
+
+A_STATUS
+wmi_set_pyxis_dscvr_config (struct wmi_t *wmip, A_UINT32 dscvrWindow, A_UINT32 dscvrInterval,
+                            A_UINT32 probeInterval, A_UINT32 probePeriod, A_UINT16 dscvrChannel)
+{
+    void *osbuf;
+    WMI_PYXIS_DSCVR_CONFIG *cmd = NULL;
+    A_UINT16 cmdLen;
+
+    cmdLen = sizeof (WMI_PYXIS_DSCVR_CONFIG);
+
+    osbuf = A_NETBUF_ALLOC (cmdLen);
+
+    if (osbuf == NULL)
+    {
+        return A_NO_MEMORY;
+    }
+
+    A_NETBUF_PUT (osbuf, cmdLen);
+
+    cmd = (WMI_PYXIS_DSCVR_CONFIG *)(A_NETBUF_DATA(osbuf));
+    A_MEMZERO(cmd, cmdLen);
+
+    cmd->hdr.pyxisConfigType = WMI_PYXIS_DSCVR_PARAMS;
+    cmd->hdr.pyxisConfigLen  = sizeof (WMI_PYXIS_DSCVR_CONFIG) - sizeof (WMI_PYXIS_CONFIG_HDR);
+    cmd->dscvrWindow         = dscvrWindow;
+    cmd->dscvrInterval       = dscvrInterval;
+    cmd->dscvrLife           = 0; // to be defined
+    cmd->probeInterval       = probeInterval;
+    cmd->probePeriod         = probePeriod;
+    cmd->dscvrChannel        = dscvrChannel;
+
+    return (wmi_cmd_send(wmip, osbuf, WMI_PYXIS_CONFIG_CMDID, NO_SYNC_WMIFLAG));
+}
+
+A_STATUS
+wmi_pyxis_join_cmd (struct wmi_t *wmip, NETWORK_TYPE    wmiNetworkType,
+                    DOT11_AUTH_MODE dot11AuthMode, AUTH_MODE authMode,
+                    CRYPTO_TYPE pairwiseCrypto, A_UINT8 pairwiseCryptoLen,
+                    CRYPTO_TYPE groupCrypto, A_UINT8 groupCryptoLen,
+                    A_UINT8 *bssid, A_UINT8 *nwBSSID, A_UINT16 channel, A_UINT32 ctrl_flags
+                    )
+{
+    void *osbuf;
+    WMI_PYXIS_JOIN_CMD *cmd = NULL;
+    A_UINT16 cmdLen;
+
+    if ((pairwiseCrypto == NONE_CRYPT) && (groupCrypto != NONE_CRYPT)) {
+        return A_EINVAL;
+    }
+
+    if ((pairwiseCrypto != NONE_CRYPT) && (groupCrypto == NONE_CRYPT)) {
+        return A_EINVAL;
+    }
+
+    cmdLen = sizeof (WMI_PYXIS_JOIN_CMD);
+
+    osbuf = A_NETBUF_ALLOC (cmdLen);
+
+    if (osbuf == NULL)
+    {
+        return A_NO_MEMORY;
+    }
+
+    A_NETBUF_PUT (osbuf, cmdLen);
+
+    cmd = (WMI_PYXIS_JOIN_CMD *)(A_NETBUF_DATA(osbuf));
+    A_MEMZERO(cmd, cmdLen);
+
+    cmd->hdr.pyxisCmd    = WMI_PYXIS_JOIN_PEER;
+    cmd->hdr.pyxisCmdLen = sizeof (WMI_PYXIS_JOIN_CMD) - sizeof (WMI_PYXIS_CMD_HDR);
+
+    if (NULL != cmd->peerMacAddr)
+    {
+        memcpy (cmd->peerMacAddr, bssid, ATH_MAC_LEN);
+    }
+    if (NULL != cmd->nwBSSID)
+    {
+        memcpy (cmd->nwBSSID, nwBSSID, ATH_MAC_LEN);
+    }
+
+    cmd->networkType         = wmiNetworkType;
+    cmd->dot11AuthMode       = dot11AuthMode;
+    cmd->authMode            = authMode;
+    cmd->pairwiseCryptoType  = pairwiseCrypto;
+    cmd->pairwiseCryptoLen   = pairwiseCryptoLen;
+    cmd->groupCryptoType     = groupCrypto;
+    cmd->groupCryptoLen      = groupCryptoLen;
+    cmd->channel             = channel;
+    cmd->ctrl_flags          = ctrl_flags;
+
+    if (wmi_set_keepalive_cmd(wmip, wmip->wmi_keepaliveInterval) != A_OK) {
+        return(A_ERROR);
+    }
+
+    return (wmi_cmd_send(wmip, osbuf, WMI_PYXIS_OPERATION_CMDID, NO_SYNC_WMIFLAG));
+}
+
+
+A_STATUS
+wmi_pyxis_disconnect_cmd (struct wmi_t *wmip, A_UINT8 *bssid)
+{
+    void *osbuf;
+    WMI_PYXIS_DISCONNECT_CMD *cmd = NULL;
+    A_UINT16 cmdLen;
+
+    cmdLen = sizeof (WMI_PYXIS_DISCONNECT_CMD);
+
+    osbuf = A_NETBUF_ALLOC (cmdLen);
+
+    if (osbuf == NULL)
+    {
+        return A_NO_MEMORY;
+    }
+
+    A_NETBUF_PUT (osbuf, cmdLen);
+
+    cmd = (WMI_PYXIS_DISCONNECT_CMD *)(A_NETBUF_DATA(osbuf));
+    A_MEMZERO(cmd, cmdLen);
+
+    cmd->hdr.pyxisCmd    = WMI_PYXIS_DISC_PEER;
+    cmd->hdr.pyxisCmdLen = ATH_MAC_LEN;
+    memcpy (cmd->peerMacAddr, bssid, ATH_MAC_LEN);
+
+    return (wmi_cmd_send (wmip, osbuf, WMI_PYXIS_OPERATION_CMDID, NO_SYNC_WMIFLAG));
+}
+
+#endif
+bss_t *wmi_rm_current_bss (struct wmi_t *wmip, A_UINT8 *id)
+{
+    wmi_get_current_bssid (wmip, id);
+    return wlan_node_remove (&wmip->wmi_scan_table, id);
+}
+
+A_STATUS wmi_add_current_bss (struct wmi_t *wmip, A_UINT8 *id, bss_t *bss)
+{
+    wlan_setup_node (&wmip->wmi_scan_table, bss, id);
+    return A_OK;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+////                                                                        ////
+////                AP mode functions                                       ////
+////                                                                        ////
+////////////////////////////////////////////////////////////////////////////////
+/*
+ * IOCTL: AR6000_XIOCTL_AP_COMMIT_CONFIG
+ *
+ * When AR6K in AP mode, This command will be called after
+ * changing ssid, channel etc. It will pass the profile to
+ * target with a flag which will indicate which parameter changed,
+ * also if this flag is 0, there was no change in parametes, so
+ * commit cmd will not be sent to target. Without calling this IOCTL
+ * the changes will not take effect.
+ */
+A_STATUS
+wmi_ap_profile_commit(struct wmi_t *wmip, WMI_CONNECT_CMD *p)
+{
+    void *osbuf;
+    WMI_CONNECT_CMD *cm;
+
+    osbuf = A_NETBUF_ALLOC(sizeof(*cm));
+    if (osbuf == NULL) {
+        return A_NO_MEMORY;
+    }
+
+    A_NETBUF_PUT(osbuf, sizeof(*cm));
+    cm = (WMI_CONNECT_CMD *)(A_NETBUF_DATA(osbuf));
+    A_MEMZERO(cm, sizeof(*cm));
+
+    A_MEMCPY(cm,p,sizeof(*cm));
+
+    return (wmi_cmd_send(wmip, osbuf, WMI_AP_CONFIG_COMMIT_CMDID, NO_SYNC_WMIFLAG));
+}
+
+/*
+ * IOCTL: AR6000_XIOCTL_AP_HIDDEN_SSID
+ *
+ * This command will be used to enable/disable hidden ssid functioanlity of
+ * beacon. If it is enabled, ssid will be NULL in beacon.
+ */
+A_STATUS
+wmi_ap_set_hidden_ssid(struct wmi_t *wmip, A_UINT8 hidden_ssid)
+{
+    void *osbuf;
+    WMI_AP_HIDDEN_SSID_CMD *hs;
+
+    osbuf = A_NETBUF_ALLOC(sizeof(WMI_AP_HIDDEN_SSID_CMD));
+    if (osbuf == NULL) {
+        return A_NO_MEMORY;
+    }
+
+    A_NETBUF_PUT(osbuf, sizeof(WMI_AP_HIDDEN_SSID_CMD));
+    hs = (WMI_AP_HIDDEN_SSID_CMD *)(A_NETBUF_DATA(osbuf));
+    A_MEMZERO(hs, sizeof(*hs));
+
+    hs->hidden_ssid          = hidden_ssid;
+
+    A_DPRINTF(DBG_WMI, (DBGFMT "AR6000_XIOCTL_AP_HIDDEN_SSID %d\n", DBGARG , hidden_ssid));
+    return (wmi_cmd_send(wmip, osbuf, WMI_AP_HIDDEN_SSID_CMDID, NO_SYNC_WMIFLAG));
+}
+
+/*
+ * IOCTL: AR6000_XIOCTL_AP_SET_MAX_NUM_STA
+ *
+ * This command is used to limit max num of STA that can connect
+ * with this AP. This value should not exceed AP_MAX_NUM_STA (this
+ * is max num of STA supported by AP). Value was already validated
+ * in ioctl.c
+ */
+A_STATUS
+wmi_ap_set_num_sta(struct wmi_t *wmip, A_UINT8 num_sta)
+{
+    void *osbuf;
+    WMI_AP_SET_NUM_STA_CMD *ns;
+
+    osbuf = A_NETBUF_ALLOC(sizeof(WMI_AP_SET_NUM_STA_CMD));
+    if (osbuf == NULL) {
+        return A_NO_MEMORY;
+    }
+
+    A_NETBUF_PUT(osbuf, sizeof(WMI_AP_SET_NUM_STA_CMD));
+    ns = (WMI_AP_SET_NUM_STA_CMD *)(A_NETBUF_DATA(osbuf));
+    A_MEMZERO(ns, sizeof(*ns));
+
+    ns->num_sta          = num_sta;
+
+    A_DPRINTF(DBG_WMI, (DBGFMT "AR6000_XIOCTL_AP_SET_MAX_NUM_STA %d\n", DBGARG , num_sta));
+    return (wmi_cmd_send(wmip, osbuf, WMI_AP_SET_NUM_STA_CMDID, NO_SYNC_WMIFLAG));
+}
+
+/*
+ * IOCTL: AR6000_XIOCTL_AP_SET_ACL_MAC
+ *
+ * This command is used to send list of mac of STAs which will
+ * be allowed to connect with this AP. When this list is empty
+ * firware will allow all STAs till the count reaches AP_MAX_NUM_STA.
+ */
+A_STATUS
+wmi_ap_acl_mac_list(struct wmi_t *wmip, WMI_AP_ACL_MAC_CMD *acl)
+{
+    void *osbuf;
+    WMI_AP_ACL_MAC_CMD *a;
+
+    osbuf = A_NETBUF_ALLOC(sizeof(WMI_AP_ACL_MAC_CMD));
+    if (osbuf == NULL) {
+        return A_NO_MEMORY;
+    }
+
+    A_NETBUF_PUT(osbuf, sizeof(WMI_AP_ACL_MAC_CMD));
+    a = (WMI_AP_ACL_MAC_CMD *)(A_NETBUF_DATA(osbuf));
+    A_MEMZERO(a, sizeof(*a));
+    A_MEMCPY(a,acl,sizeof(*acl));
+
+    return (wmi_cmd_send(wmip, osbuf, WMI_AP_ACL_MAC_LIST_CMDID, NO_SYNC_WMIFLAG));
+}
+
+/*
+ * IOCTL: AR6000_XIOCTL_AP_SET_MLME
+ *
+ * This command is used to send list of mac of STAs which will
+ * be allowed to connect with this AP. When this list is empty
+ * firware will allow all STAs till the count reaches AP_MAX_NUM_STA.
+ */
+A_STATUS
+wmi_ap_set_mlme(struct wmi_t *wmip, A_UINT8 cmd, A_UINT8 *mac, A_UINT16 reason)
+{
+    void *osbuf;
+    WMI_AP_SET_MLME_CMD *mlme;
+
+    osbuf = A_NETBUF_ALLOC(sizeof(WMI_AP_SET_MLME_CMD));
+    if (osbuf == NULL) {
+        return A_NO_MEMORY;
+    }
+
+    A_NETBUF_PUT(osbuf, sizeof(WMI_AP_SET_MLME_CMD));
+    mlme = (WMI_AP_SET_MLME_CMD *)(A_NETBUF_DATA(osbuf));
+    A_MEMZERO(mlme, sizeof(*mlme));
+
+    mlme->cmd = cmd;
+    A_MEMCPY(mlme->mac, mac, ATH_MAC_LEN);
+    mlme->reason = reason;
+
+    return (wmi_cmd_send(wmip, osbuf, WMI_AP_SET_MLME_CMDID, NO_SYNC_WMIFLAG));
+}
+
+static A_STATUS
+wmi_pspoll_event_rx(struct wmi_t *wmip, A_UINT8 *datap, int len)
+{
+    WMI_PSPOLL_EVENT *ev;
+
+    if (len < sizeof(WMI_PSPOLL_EVENT)) {
+        return A_EINVAL;
+    }
+    ev = (WMI_PSPOLL_EVENT *)datap;
+
+    A_WMI_PSPOLL_EVENT(wmip->wmi_devt, ev->aid);
+    return A_OK;
+}
+
+static A_STATUS
+wmi_dtimexpiry_event_rx(struct wmi_t *wmip, A_UINT8 *datap,int len)
+{
+    A_WMI_DTIMEXPIRY_EVENT(wmip->wmi_devt);
+    return A_OK;
+}
+
+A_STATUS
+wmi_set_pvb_cmd(struct wmi_t *wmip, A_UINT16 aid, A_BOOL flag)
+{
+    WMI_AP_SET_PVB_CMD *cmd;
+    void *osbuf = NULL;
+
+    osbuf = A_NETBUF_ALLOC(sizeof(WMI_AP_SET_PVB_CMD));
+    if (osbuf == NULL) {
+        return A_NO_MEMORY;
+    }
+
+    A_NETBUF_PUT(osbuf, sizeof(WMI_AP_SET_PVB_CMD));
+    cmd = (WMI_AP_SET_PVB_CMD *)(A_NETBUF_DATA(osbuf));
+    A_MEMZERO(cmd, sizeof(*cmd));
+
+    cmd->aid = aid;
+    cmd->flag = flag;
+
+    return (wmi_cmd_send(wmip, osbuf, WMI_AP_SET_PVB_CMDID, NO_SYNC_WMIFLAG));
+}
+
+A_STATUS
+wmi_ap_conn_inact_time(struct wmi_t *wmip, A_UINT32 period)
+{
+    WMI_AP_CONN_INACT_CMD *cmd;
+    void *osbuf = NULL;
+
+    osbuf = A_NETBUF_ALLOC(sizeof(WMI_AP_CONN_INACT_CMD));
+    if (osbuf == NULL) {
+        return A_NO_MEMORY;
+    }
+
+    A_NETBUF_PUT(osbuf, sizeof(WMI_AP_CONN_INACT_CMD));
+    cmd = (WMI_AP_CONN_INACT_CMD *)(A_NETBUF_DATA(osbuf));
+    A_MEMZERO(cmd, sizeof(*cmd));
+
+    cmd->period = period;
+
+    return (wmi_cmd_send(wmip, osbuf, WMI_AP_CONN_INACT_CMDID, NO_SYNC_WMIFLAG));
+}
+
+A_STATUS
+wmi_ap_bgscan_time(struct wmi_t *wmip, A_UINT32 period, A_UINT32 dwell)
+{
+    WMI_AP_PROT_SCAN_TIME_CMD *cmd;
+    void *osbuf = NULL;
+
+    osbuf = A_NETBUF_ALLOC(sizeof(WMI_AP_PROT_SCAN_TIME_CMD));
+    if (osbuf == NULL) {
+        return A_NO_MEMORY;
+    }
+
+    A_NETBUF_PUT(osbuf, sizeof(WMI_AP_PROT_SCAN_TIME_CMD));
+    cmd = (WMI_AP_PROT_SCAN_TIME_CMD *)(A_NETBUF_DATA(osbuf));
+    A_MEMZERO(cmd, sizeof(*cmd));
+
+    cmd->period_min = period;
+    cmd->dwell_ms   = dwell;
+
+    return (wmi_cmd_send(wmip, osbuf, WMI_AP_PROT_SCAN_TIME_CMDID, NO_SYNC_WMIFLAG));
+}
+
+A_STATUS
+wmi_ap_set_dtim(struct wmi_t *wmip, A_UINT8 dtim)
+{
+    WMI_AP_SET_DTIM_CMD *cmd;
+    void *osbuf = NULL;
+
+    osbuf = A_NETBUF_ALLOC(sizeof(WMI_AP_SET_DTIM_CMD));
+    if (osbuf == NULL) {
+        return A_NO_MEMORY;
+    }
+
+    A_NETBUF_PUT(osbuf, sizeof(WMI_AP_SET_DTIM_CMD));
+    cmd = (WMI_AP_SET_DTIM_CMD *)(A_NETBUF_DATA(osbuf));
+    A_MEMZERO(cmd, sizeof(*cmd));
+
+    cmd->dtim = dtim;
+
+    return (wmi_cmd_send(wmip, osbuf, WMI_AP_SET_DTIM_CMDID, NO_SYNC_WMIFLAG));
+}
+
+/*
+ * IOCTL: AR6000_XIOCTL_AP_SET_ACL_POLICY
+ *
+ * This command is used to set ACL policay. While changing policy, if you
+ * want to retain the existing MAC addresses in the ACL list, policy should be
+ * OR with AP_ACL_RETAIN_LIST_MASK, else the existing list will be cleared.
+ * If there is no chage in policy, the list will be intact.
+ */
+A_STATUS
+wmi_ap_set_acl_policy(struct wmi_t *wmip, A_UINT8 policy)
+{
+    void *osbuf;
+    WMI_AP_ACL_POLICY_CMD *po;
+
+    osbuf = A_NETBUF_ALLOC(sizeof(WMI_AP_ACL_POLICY_CMD));
+    if (osbuf == NULL) {
+        return A_NO_MEMORY;
+    }
+
+    A_NETBUF_PUT(osbuf, sizeof(WMI_AP_ACL_POLICY_CMD));
+    po = (WMI_AP_ACL_POLICY_CMD *)(A_NETBUF_DATA(osbuf));
+    A_MEMZERO(po, sizeof(*po));
+
+    po->policy = policy;
+
+    return (wmi_cmd_send(wmip, osbuf, WMI_AP_ACL_POLICY_CMDID, NO_SYNC_WMIFLAG));
 }
 
