@@ -185,8 +185,8 @@ static struct platform_device huawei_battery_device = {
 static struct usb_mass_storage_platform_data usb_mass_storage_pdata = {
 	.nluns          = 0x02,
 	.buf_size       = 16384,
-	.vendor         = "Huawei",
-	.product        = "U8120",
+	.vendor         = "GOOGLE",
+	.product        = "Mass storage",
 	.release        = 0xffff,
 };
 
@@ -2276,8 +2276,8 @@ static struct platform_device msm_batt_device = {
 };
 
 
-static struct platform_device msm_wlan_ar6000 = {
-	.name		= "wlan_ar6000",
+static struct platform_device msm_wlan_ar6000_pm_device = {
+	.name		= "wlan_ar6000_pm_dev",
 	.id		= 1,
 	.num_resources	= 0,
 	.resource	= NULL,
@@ -2297,7 +2297,7 @@ static struct platform_device huawei_device_detect = {
 static struct platform_device *devices[] __initdata = {
 #ifndef HUAWEI_BCM4329
 #ifdef CONFIG_HUAWEI_WIFI_SDCC
-	&msm_wlan_ar6000,
+	&msm_wlan_ar6000_pm_device,
 #endif
 #endif
 #if !defined(CONFIG_MSM_SERIAL_DEBUGGER)
@@ -2578,7 +2578,7 @@ static uint32_t msm_sdcc_setup_power(struct device *dv, unsigned int vdd)
 	}
 
 	if (!vreg_sts) {
-        /*wifi ï¿½ï¿½?ï¿½ï¿½?2??ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½|ï¿½ï¿½|ï¿½ï¿½ï¿½ï¿½,ï¿½ï¿½?SD?ï¿½ï¿½Dï¿½ï¿½ï¿½ï¿½a?ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½|ï¿½ï¿½?ï¿½ï¿½?,??DT??vreg_mmc*/
+        /*wifi ¨¦?¦Ì?2??¨²¡ä?¡ä|¡ä|¨¤¨ª,¨¨?SD?¡§D¨¨¨°a?¨²¡ä?¡ä|¨¦?¦Ì?,??DT??vreg_mmc*/
         //rc = vreg_set_level(vreg_mmc, 2850);
         if (!rc)
             //rc = vreg_enable(vreg_mmc);
@@ -3316,7 +3316,7 @@ static void __init virtualkeys_init(void)
         buf_vkey_size = sprintf(buf_virtualkey,
                  __stringify(EV_KEY) ":" __stringify(KEY_BACK)  ":28:340:30:30"
                 ":" __stringify(EV_KEY) ":" __stringify(KEY_MENU)   ":96:340:30:30"
-                ":" __stringify(EV_KEY) ":" __stringify(KEY_HOME)   ":144:340:30:30"
+                ":" __stringify(EV_KEY) ":" __stringify(KEY_HOME)   ":152:340:30:30"
                 ":" __stringify(EV_KEY) ":" __stringify(KEY_SEARCH) ":212:340:30:30"
         		   "\n");  
     }
@@ -3950,11 +3950,12 @@ int board_surport_fingers(bool * is_surport_fingers)
     {
          return -ENOMEM;
     }
-
+//Modified by Joey Jiao to add more devices
     if( machine_is_msm7x25_u8500() || machine_is_msm7x25_um840() \
      || machine_is_msm7x25_u8350() || machine_is_msm7x25_u8130() \
-     || machine_is_msm7x25_u8120() || machine_is_msm7x25_u8100() \
-     || machine_is_msm7x25_c8510() || machine_is_msm7x25_u8160() )
+	 || machine_is_msm7x25_c8510() || machine_is_msm7x25_u8160() \
+     || machine_is_msm7x25_c8500() || machine_is_msm7x25_c8600() \
+	 || machine_is_msm7x25_u8150() || machine_is_msm7x25_c8150())
     {
          *is_surport_fingers = true;
     }
