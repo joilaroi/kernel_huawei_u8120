@@ -1,0 +1,13 @@
+#
+# U81XX Undervolt module configuration
+#
+
+config HUAWEI_UNDERVOLT
+	tristate "Huawei undervolt"
+	help
+	  Say Y here if you want to build an undervolt module for U81XX devices
+
+	  If unsure, say N.
+
+	  To compile this module, choose M here: the
+	  module will be called huaweiuv.

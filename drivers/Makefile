@@ -114,3 +114,5 @@ obj-y				+= platform/
 obj-y				+= ieee802154/
 obj-$(CONFIG_HUAWEI_CRASH_DUMP) += crash/
 obj-$(CONFIG_HUAWEI_HW_DEV_DCT) += devdetect/
+obj-$(CONFIG_HUAWEI_UNDERVOLT)  += uv_huawei/
+
