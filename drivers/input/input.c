@@ -1540,12 +1540,6 @@ int input_register_device(struct input_dev *dev)
 		dev->name ? dev->name : "Unspecified device", path ? path : "N/A");
 	kfree(path);
 
-	if(!dev->name){
-		printk(KERN_DEBUG "Not specified input device name.\n");
-		device_del(&dev->dev);
-		return -1;
-	}
-
 	error = mutex_lock_interruptible(&input_mutex);
 	if (error) {
 		device_del(&dev->dev);

@@ -1523,10 +1523,6 @@ static void usb_do_work(struct work_struct *w)
 				ui->chg_current = 0;
 				spin_unlock_irqrestore(&ui->lock, iflags);
 
-#ifdef CONFIG_USB_AUTO_INSTALL
-                initiate_switch_to_cdrom(0);
-#endif  /* CONFIG_USB_AUTO_INSTALL */
-
 				/* if charger is initialized to known type
 				 * we must let modem know about charger
 				 * disconnection

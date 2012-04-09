@@ -130,6 +130,7 @@ struct audio {
 
 	int mfield; /* meta field embedded in data */
 	int rflush; /* Read  flush */
+	int eos_in_progress;
 	int wflush; /* Write flush */
 	int opened;
 	int enabled;
@@ -178,8 +179,10 @@ static void audplay_send_data(struct audio *audio, unsigned needed);
 static void audplay_config_hostpcm(struct audio *audio);
 static void audplay_buffer_refresh(struct audio *audio);
 static void audio_dsp_event(void *private, unsigned id, uint16_t *msg);
+#ifdef CONFIG_HAS_EARLYSUSPEND
 static void audaac_post_event(struct audio *audio, int type,
 		union msm_audio_event_payload payload);
+#endif
 
 /* must be called with audio->lock held */
 static int audio_enable(struct audio *audio)
@@ -581,7 +584,12 @@ static void audplay_send_data(struct audio *audio, unsigned needed)
 			frame->used = 0;
 			audio->out_tail ^= 1;
 			wake_up(&audio->write_wait);
+		} else if ((audio->out[0].used == 0) &&
+			 (audio->out[1].used == 0) &&
+			 (audio->eos_in_progress)) {
+			wake_up(&audio->write_wait);
 		}
+
 	}
 
 	if (audio->out_needed) {
@@ -1242,6 +1250,7 @@ static int audaac_process_eos(struct audio *audio,
 	struct buffer *frame;
 	char *buf_ptr;
 	int rc = 0;
+	unsigned long flags = 0;
 
 	MM_DBG("signal input EOS reserved=%d\n", audio->reserved);
 	if (audio->reserved) {
@@ -1270,12 +1279,20 @@ static int audaac_process_eos(struct audio *audio,
 		audio->out[0].used, audio->out[1].used, audio->out_needed);
 	frame = audio->out + audio->out_head;
 
+	spin_lock_irqsave(&audio->dsp_lock, flags);
+	audio->eos_in_progress = 1;
+	spin_unlock_irqrestore(&audio->dsp_lock, flags);
+
 	rc = wait_event_interruptible(audio->write_wait,
 		(audio->out_needed &&
 		audio->out[0].used == 0 &&
 		audio->out[1].used == 0)
 		|| (audio->stopped)
 		|| (audio->wflush));
+
+	spin_lock_irqsave(&audio->dsp_lock, flags);
+	audio->eos_in_progress = 0;
+	spin_unlock_irqrestore(&audio->dsp_lock, flags);
 
 	if (rc < 0)
 		goto done;
@@ -1443,6 +1460,7 @@ static int audio_release(struct inode *inode, struct file *file)
 	return 0;
 }
 
+#ifdef CONFIG_HAS_EARLYSUSPEND
 static void audaac_post_event(struct audio *audio, int type,
 		union msm_audio_event_payload payload)
 {
@@ -1459,6 +1477,7 @@ static void audaac_post_event(struct audio *audio, int type,
 		e_node = kmalloc(sizeof(struct audaac_event), GFP_ATOMIC);
 		if (!e_node) {
 			MM_ERR("No mem to post event %d\n", type);
+			spin_unlock_irqrestore(&audio->event_queue_lock, flags);
 			return;
 		}
 	}
@@ -1471,7 +1490,6 @@ static void audaac_post_event(struct audio *audio, int type,
 	wake_up(&audio->event_wait);
 }
 
-#ifdef CONFIG_HAS_EARLYSUSPEND
 static void audaac_suspend(struct early_suspend *h)
 {
 	struct audaac_suspend_ctl *ctl =
