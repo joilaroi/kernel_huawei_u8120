@@ -47,7 +47,6 @@
 #include <mach/clk.h>
 #include <mach/dma.h>
 #include <mach/htc_pwrsink.h>
-
 #include <linux/hardware_self_adapt.h>
 
 #include <mach/vreg.h>
@@ -95,7 +94,9 @@ static int msmsdcc_auto_suspend(struct mmc_host *, int);
 #endif
 
 static unsigned int msmsdcc_pwrsave = 1;
+#ifndef HUAWEI_BCM4329
 static unsigned int wifi_chip_is_bcm = 0;
+#endif
 
 #define DUMMY_52_STATE_NONE		0
 #define DUMMY_52_STATE_SENT		1
@@ -1058,6 +1059,7 @@ static int msmsdcc_send_dummy_cmd52_read(struct msmsdcc_host *host)
 	return -ETIMEDOUT;
 }
 #endif
+/*modify for update qualcom 2110 baseline end*/
 
 static void
 msmsdcc_request_start(struct msmsdcc_host *host, struct mmc_request *mrq)
@@ -1099,7 +1101,6 @@ msmsdcc_request(struct mmc_host *mmc, struct mmc_request *mrq)
 	
 #ifdef CONFIG_HUAWEI_WIFI_SDCC 	
 	if ( host->pdev_id == SDCC_WIFI_SLOT ) {
-		/* add fix for dummy52 issue*/
 		if (host->pre_cmd_with_data) {
 			if ( mrq->data ) {
 				host->saved_irq0mask = readl(host->base + MMCIMASK0);
@@ -1142,17 +1143,22 @@ msmsdcc_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 	struct msmsdcc_host *host = mmc_priv(mmc);
 	u32 clk = 0, pwr = 0;
 	int rc;
+	/*forbid race condition with suspend thread*/	
+	unsigned long flags;
 
 	DBG(host, "ios->clock = %u\n", ios->clock);
 
 	if (ios->clock) {
-
+		/*forbid race condition with suspend thread*/	
+		spin_lock_irqsave(&host->lock, flags);
+		
 		if (!host->clks_on) {
 			if (!IS_ERR(host->pclk))
 				clk_enable(host->pclk);
 			clk_enable(host->clk);
 			host->clks_on = 1;
 		}
+		spin_unlock_irqrestore(&host->lock, flags);
 
 		if ((ios->clock < host->plat->msmsdcc_fmax) &&
 				(ios->clock > host->plat->msmsdcc_fmid))
@@ -1207,12 +1213,15 @@ msmsdcc_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 		writel(pwr, host->base + MMCIPOWER);
 	}
 
+	/*forbid race condition with suspend thread*/	
+	spin_lock_irqsave(&host->lock, flags);
 	if (!(clk & MCI_CLK_ENABLE) && host->clks_on) {
 		clk_disable(host->clk);
 		if (!IS_ERR(host->pclk))
 			clk_disable(host->pclk);
 		host->clks_on = 0;
 	}
+	spin_unlock_irqrestore(&host->lock, flags);
 }
 
 static int msmsdcc_get_ro(struct mmc_host *mmc)
@@ -1377,9 +1386,23 @@ set_polling(struct device *dev, struct device_attribute *attr,
 	spin_unlock_irqrestore(&host->lock, flags);
 	return count;
 }
-#if 0
+
+#ifdef CONFIG_HUAWEI_WIFI_SDCC
+#define WLAN_SDCC_ID                           2
+#define WLAN_1_8V_ID                           "mmc"
+#ifdef  CONFIG_MACH_MSM7201A_SURF
+#define WLAN_1_2V_MPP                          "mpp17"
+#define WLAN_CHIP_PWD                          "mpp4"
+#else
+#define WLAN_1_2V_MPP                          "mpp15"
+#define WLAN_CHIP_PWD                          "mpp21"
+#endif
+#endif
+
+#ifdef CONFIG_HUAWEI_WIFI_SDCC
 void bcm_wlan_power_on(int enable)
 {
+	printk(KERN_DEBUG "Inside bcm_wlan_power_on\n");
 	int ret = 0;
 
    	if (enable)
@@ -1448,6 +1471,7 @@ void bcm_wlan_power_off(int i)
 
 EXPORT_SYMBOL(bcm_wlan_power_off);
 EXPORT_SYMBOL(bcm_wlan_power_on);
+/* support kernel32,WIFI Module,hanshirong 66539,20100527 end >*/
 #endif
 static DEVICE_ATTR(polling, S_IRUGO | S_IWUSR,
 		show_polling, set_polling);
@@ -1460,6 +1484,7 @@ static struct attribute_group dev_attr_grp = {
 };
 
 #ifdef CONFIG_HAS_EARLYSUSPEND
+#ifndef HUAWEI_BCM4329
 #ifndef CONFIG_HUAWEI_WIFI_SDCC
 static void msmsdcc_early_suspend(struct early_suspend *h)
 {
@@ -1485,6 +1510,7 @@ static void msmsdcc_late_resume(struct early_suspend *h)
 		spin_unlock_irqrestore(&host->lock, flags);
 	}
 };
+#endif
 #endif
 #endif
 
@@ -1730,11 +1756,13 @@ msmsdcc_probe(struct platform_device *pdev)
 	mmc_add_host(mmc);
 
 #ifdef CONFIG_HAS_EARLYSUSPEND
+#ifndef HUAWEI_BCM4329
 #ifndef CONFIG_HUAWEI_WIFI_SDCC
 	host->early_suspend.suspend = msmsdcc_early_suspend;
 	host->early_suspend.resume  = msmsdcc_late_resume;
 	host->early_suspend.level   = EARLY_SUSPEND_LEVEL_DISABLE_FB;
 	register_early_suspend(&host->early_suspend);
+#endif
 #endif
 #endif
 
@@ -1853,19 +1881,24 @@ static int msmsdcc_remove(struct platform_device *pdev)
 	mmc_free_host(mmc);
 
 #ifdef CONFIG_HAS_EARLYSUSPEND
+#ifndef HUAWEI_BCM4329
 #ifndef CONFIG_HUAWEI_WIFI_SDCC
 	unregister_early_suspend(&host->early_suspend);
+#endif
 #endif
 #endif
 
 	return 0;
 }
 
+#ifdef CONFIG_PM
+
 #ifdef CONFIG_HUAWEI_WIFI_SDCC
 struct msmsdcc_host *wlan_host;
 
 void msmsdcc_disable_wlan_slot(void)
 {
+	printk(KERN_DEBUG "Inside msmsdcc_disable_wlan_slot\n");
 	struct msmsdcc_host *host = wlan_host;
 
 	if (host->plat->status_irq)
@@ -1882,6 +1915,7 @@ void msmsdcc_disable_wlan_slot(void)
 
 void msmsdcc_enable_wlan_slot(void)
 {
+	printk(KERN_DEBUG "Inside msmsdcc_enable_wlan_slot\n");
 	struct msmsdcc_host *host = wlan_host;
 	unsigned long flags;
 
@@ -1901,25 +1935,28 @@ void msmsdcc_enable_wlan_slot(void)
 EXPORT_SYMBOL(msmsdcc_disable_wlan_slot);
 EXPORT_SYMBOL(msmsdcc_enable_wlan_slot);
 #endif
-
-#ifdef CONFIG_PM
-
 static int
 msmsdcc_suspend(struct platform_device *dev, pm_message_t state)
 {
+printk(KERN_INFO "Enter msmsdcc_suspend: \n");
 	struct mmc_host *mmc = mmc_get_drvdata(dev);
-	struct msmsdcc_host *host = mmc_priv(mmc);
 	int rc = 0;
 
-	printk(KERN_INFO "Enter msmsdcc_suspend: \n");
+	/*forbid race condition with kmmcd thread*/		
+	unsigned long flags;
 
 #ifdef CONFIG_MMC_AUTO_SUSPEND
 	if (test_and_set_bit(0, &host->suspended))
 		return 0;
 #endif
+
 	if (mmc) {
-#ifdef CONFIG_HUAWEI_WIFI_SDCC
+		struct msmsdcc_host *host = mmc_priv(mmc);
 		msmsdcc_wlan_pwr_ctrl = msmsdcc_wlan_pwr_ctrl_new;
+
+#ifdef CONFIG_HUAWEI_WIFI_SDCC	
+//add for debug
+printk(KERN_DEBUG "host->pdev_id=%d,wifi_chip_is_bcm=%d,msmsdcc_slwan_pwr_ctrl=%d",host->pdev_id,wifi_chip_is_bcm,msmsdcc_wlan_pwr_ctrl);
 		if ((host->pdev_id == SDCC_WIFI_SLOT) && !wifi_chip_is_bcm && (msmsdcc_wlan_pwr_ctrl != WLAN_PWR_CTRL_CUT_PWR)) {
 			printk("%s: WLAN slot with non-cut-power case\n", __func__);
 			wlan_host = host;
@@ -1930,10 +1967,26 @@ msmsdcc_suspend(struct platform_device *dev, pm_message_t state)
 
 		if (host->plat->status_irq)
 			disable_irq(host->plat->status_irq);
-
-		if (!mmc->card || mmc->card->type != MMC_TYPE_SDIO)
+//add from 2.6.29
+#ifndef CONFIG_HUAWEI_WIFI_SDCC
+		if (mmc->card && mmc->card->type != MMC_TYPE_SDIO)
 			rc = mmc_suspend_host(mmc, state);
+#else
+		if ((host->pdev_id == SDCC_WIFI_SLOT) && !wifi_chip_is_bcm ){
+			if (mmc->card)
+				rc = mmc_suspend_host(mmc, state);
+		} else {
+			if (mmc->card && mmc->card->type != MMC_TYPE_SDIO)
+				rc = mmc_suspend_host(mmc, state);
+		}
+#endif
+//disable from xda
+		//if (!mmc->card || mmc->card->type != MMC_TYPE_SDIO)
+		//	rc = mmc_suspend_host(mmc, state);
 		if (!rc) {
+			/*forbid race condition with kmmcd thread*/ 	
+			spin_lock_irqsave(&host->lock, flags);
+			
 			writel(0, host->base + MMCIMASK0);
 
 			if (host->clks_on) {
@@ -1942,12 +1995,12 @@ msmsdcc_suspend(struct platform_device *dev, pm_message_t state)
 					clk_disable(host->pclk);
 				host->clks_on = 0;
 			}
+			spin_unlock_irqrestore(&host->lock, flags);
 		}
-
-		if (host->plat->sdiowakeup_irq)
-			enable_irq(host->plat->sdiowakeup_irq);
+//disable from xda
+		//if (host->plat->sdiowakeup_irq)
+		//	enable_irq(host->plat->sdiowakeup_irq);
 	}
-	printk(KERN_INFO "Leave msmsdcc_suspend: \n");
 	return rc;
 }
 
@@ -1955,15 +2008,21 @@ static int
 msmsdcc_resume(struct platform_device *dev)
 {
 	struct mmc_host *mmc = mmc_get_drvdata(dev);
-	struct msmsdcc_host *host = mmc_priv(mmc);
 	unsigned long flags;
-	printk(KERN_INFO "Enter msmsdcc_resume: \n");
 
 #ifdef CONFIG_MMC_AUTO_SUSPEND
 	if (!test_and_clear_bit(0, &host->suspended))
 		return 0;
 #endif
 	if (mmc) {
+		struct msmsdcc_host *host = mmc_priv(mmc);
+//add from 2.6.29
+#ifdef CONFIG_HUAWEI_WIFI_SDCC
+		if ((host->pdev_id == SDCC_WIFI_SLOT) && !wifi_chip_is_bcm && (msmsdcc_wlan_pwr_ctrl != WLAN_PWR_CTRL_CUT_PWR)){
+			printk("%s: WLAN slot with wow case\n", __func__);
+			return 0;
+		}
+#endif
 		spin_lock_irqsave(&host->lock, flags);
 		if (!host->clks_on) {
 			if (!IS_ERR(host->pclk))
@@ -1975,17 +2034,53 @@ msmsdcc_resume(struct platform_device *dev)
 		writel(host->mci_irqenable, host->base + MMCIMASK0);
 
 		spin_unlock_irqrestore(&host->lock, flags);
-
+//add from 2.6.29
+#ifndef CONFIG_HUAWEI_WIFI_SDCC
+		if (mmc->card && mmc->card->type != MMC_TYPE_SDIO)
+#ifdef CONFIG_MMC_MSM7X00A_RESUME_IN_WQ
+			schedule_work(&host->resume_task);
+#else
+			mmc_resume_host(mmc);
+			if (host->plat->status_irq)
+				enable_irq(host->plat->status_irq);
+#endif
+		else if (host->plat->status_irq)
+			enable_irq(host->plat->status_irq);
+#else
+		if ((host->pdev_id == SDCC_WIFI_SLOT) && !wifi_chip_is_bcm){
+			if(mmc->card)
+#ifdef CONFIG_MMC_MSM7X00A_RESUME_IN_WQ
+				schedule_work(&host->resume_task);
+#else
+				mmc_resume_host(mmc);
+				if(host->plat->status_irq)
+					enable_irq(host->plat->status_irq);
+#endif
+			else if (host->plat->status_irq)
+				enable_irq(host->plat->status_irq);
+		} else {
+			if(mmc->card && mmc->card->type != MMC_TYPE_SDIO)
+#ifdef CONFIG_MMC_MSM7X00A_RESUME_IN_WQ
+				schedule_work(&host->resume_task);
+#else
+				mmc_resume_host(mmc);
+				if(host->plat->status_irq)
+					enable_irq(host->plat->status_irq);
+#endif
+			else if(host->plat->status_irq)
+				enable_irq(host->plat->status_irq);
+		}
+#endif		
+		/*disable from xda
 		if (host->plat->sdiowakeup_irq)
 			disable_irq(host->plat->sdiowakeup_irq);
 
 		if (!mmc->card || mmc->card->type != MMC_TYPE_SDIO)
 			mmc_resume_host(mmc);
 		if (host->plat->status_irq)
-			enable_irq(host->plat->status_irq);
+			enable_irq(host->plat->status_irq);*/
 
 	}
-	printk(KERN_INFO "Leave msmsdcc_resume: \n");
 	return 0;
 }
 #else
@@ -2135,8 +2230,10 @@ static int __init msmsdcc_init(void)
 		return ret;
 	}
 #endif
+#ifndef HUAWEI_BCM4329
 	wifi_chip_is_bcm = board_support_bcm_wifi(NULL);
     printk(KERN_ERR"%s: now wifi_chip_is_bcm is set to %d\n", __func__, wifi_chip_is_bcm);
+#endif
 
 	return platform_driver_register(&msmsdcc_driver);
 }
@@ -2228,3 +2325,4 @@ static int __init msmsdcc_dbg_init(void)
 	return 0;
 }
 #endif
+
